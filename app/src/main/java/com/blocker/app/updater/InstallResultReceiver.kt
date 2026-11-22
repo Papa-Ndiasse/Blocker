@@ -1,0 +1,45 @@
+package com.blocker.app.updater
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageInstaller
+import android.util.Log
+import com.blocker.app.admin.DeviceOwnerController
+import java.io.File
+
+/**
+ * Receives completion status from silent self-updates committed via PackageInstaller.Session.
+ * Cleans up the downloaded APK and immediately re-enforces all Device Owner locks.
+ */
+class InstallResultReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val versionName = intent.getStringExtra(EXTRA_VERSION_NAME) ?: ""
+
+        // Clean cached APK
+        runCatching {
+            val deviceCtx = context.createDeviceProtectedStorageContext()
+            File(deviceCtx.cacheDir, GitHubAutoUpdater.PENDING_APK_NAME).delete()
+        }
+
+        if (status == PackageInstaller.STATUS_SUCCESS) {
+            Log.i(TAG, "Silent self-update to v$versionName succeeded")
+        } else {
+            Log.w(TAG, "Silent self-update to v$versionName failed (status=$status): $message")
+        }
+
+        // Always re-enforce all Device Owner locks (including DISALLOW_INSTALL_APPS if latched)
+        val controller = DeviceOwnerController(context)
+        if (controller.isDeviceOwner()) {
+            controller.enforcePermanentLockdown()
+        }
+    }
+
+    companion object {
+        private const val TAG = "InstallResultReceiver"
+        const val EXTRA_VERSION_NAME = "extra_version_name"
+    }
+}

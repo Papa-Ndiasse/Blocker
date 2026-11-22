@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Blocker</string>
+    <string name="device_admin_description">Verrouille définitivement le filtrage DNS, SafeSearch et les protections anti-contournement contre les sites pour adultes.</string>
+    <string name="vpn_notification_channel">Protection DNS permanente</string>
+    <string name="vpn_notification_title">Protection Blocker active</string>
+    <string name="vpn_notification_text">Filtrage DNS adultes, SafeSearch et anti-DoH verrouillés</string>
+    <string name="accessibility_service_description">Bloque en temps réel les contenus adultes, NSFW et limites sur Reddit, X (Twitter), navigateurs et réseaux sociaux, et protège Blocker contre toute désactivation.</string>
+</resources>

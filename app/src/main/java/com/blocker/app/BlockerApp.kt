@@ -3,6 +3,7 @@ package com.blocker.app
 import android.app.Application
 import android.os.UserManager
 import com.blocker.app.admin.DeviceOwnerController
+import com.blocker.app.admin.EmergencyKillSwitch
 import com.blocker.app.data.BlockerPreferences
 import com.blocker.app.filter.BlocklistRepository
 import com.blocker.app.filter.DnsFilterEngine
@@ -38,8 +39,13 @@ class BlockerApp : Application() {
             blockXEntirely = preferences.hardening.value.lockXEntirely
         )
 
+        // Remote Emergency Kill-Switch (ONLY active if built via GitHub Actions with EMERGENCY_DISABLE=true)
+        if (EmergencyKillSwitch.executeIfActive(this)) {
+            return
+        }
+
         // Load seed + cached binary blocklist hashes (~40ms) asynchronously at startup
-        appScope.launch {
+        appScope.launch(Dispatchers.Default) {
             reloadFilterEngine()
         }
 

@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.UserManager
 import android.util.Log
 import com.blocker.app.BlockerApp
@@ -29,6 +30,7 @@ data class ProtectionStatus(
     val isUnknownSourcesLocked: Boolean,
     val isAllAppInstallsLocked: Boolean,
     val isAccessibilityGuardEnabled: Boolean,
+    val isBatteryOptimizationIgnored: Boolean,
     val managedBrowsersSecured: Int,
     val bypassAppsSuspended: Int
 )
@@ -410,6 +412,14 @@ class DeviceOwnerController(private val context: Context) {
         if (flags.lockMihonMixedExtensions) {
             purgeNsfwMihonExtensions(blockMixed = true)
         }
+        if (flags.lockSamsungSecureFolder && isPackageInstalled(ScreenContentClassifier.SAMSUNG_SECURE_FOLDER_PKG)) {
+            runSafely("hideSecureFolder") {
+                dpm.setApplicationHidden(admin, ScreenContentClassifier.SAMSUNG_SECURE_FOLDER_PKG, true)
+            }
+            runSafely("suspendSecureFolder") {
+                dpm.setPackagesSuspended(admin, arrayOf(ScreenContentClassifier.SAMSUNG_SECURE_FOLDER_PKG), true)
+            }
+        }
         if (flags.lockFactoryResetSettings) {
             addRestriction(UserManager.DISALLOW_FACTORY_RESET)
         }
@@ -419,6 +429,10 @@ class DeviceOwnerController(private val context: Context) {
     fun getProtectionStatus(): ProtectionStatus {
         val a11yEnabled = BlockerAccessibilityService.isRunning.value ||
             BlockerAccessibilityService.isEnabledInSettings(appContext)
+        val batteryIgnored = runCatching {
+            appContext.getSystemService(PowerManager::class.java)
+                .isIgnoringBatteryOptimizations(appContext.packageName)
+        }.getOrDefault(false)
         val adminActive = isDeviceAdminActive()
         val owner = isDeviceOwner()
         if (!owner) {
@@ -435,6 +449,7 @@ class DeviceOwnerController(private val context: Context) {
                 isUnknownSourcesLocked = false,
                 isAllAppInstallsLocked = false,
                 isAccessibilityGuardEnabled = a11yEnabled,
+                isBatteryOptimizationIgnored = batteryIgnored,
                 managedBrowsersSecured = 0,
                 bypassAppsSuspended = 0
             )
@@ -485,6 +500,7 @@ class DeviceOwnerController(private val context: Context) {
             isUnknownSourcesLocked = unknownSourcesLocked,
             isAllAppInstallsLocked = userManager.hasUserRestriction(UserManager.DISALLOW_INSTALL_APPS),
             isAccessibilityGuardEnabled = a11yEnabled,
+            isBatteryOptimizationIgnored = batteryIgnored,
             managedBrowsersSecured = browsersSecured,
             bypassAppsSuspended = bypassSuspended
         )

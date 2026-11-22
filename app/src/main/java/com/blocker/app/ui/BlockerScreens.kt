@@ -90,8 +90,14 @@ import java.util.Locale
 fun BlockerRootScreen(
     viewModel: MainViewModel,
     onRequestStartVpn: () -> Unit,
-    onRequestDeviceAdmin: () -> Unit
+    onRequestDeviceAdmin: () -> Unit,
+    onRequestBatteryUnrestricted: () -> Unit
 ) {
+    if (BuildConfig.EMERGENCY_DISABLE) {
+        EmergencyRecoveryScreen()
+        return
+    }
+
     val status by viewModel.protectionStatus.collectAsState()
     val vpnRunning by viewModel.vpnRunning.collectAsState()
     val totalBlocked by viewModel.totalBlocked.collectAsState()
@@ -163,6 +169,7 @@ fun BlockerRootScreen(
                     isCheckingUpdate = isCheckingUpdate,
                     onRequestStartVpn = onRequestStartVpn,
                     onRequestDeviceAdmin = onRequestDeviceAdmin,
+                    onRequestBatteryUnrestricted = onRequestBatteryUnrestricted,
                     onRefreshStatus = viewModel::refreshStatus,
                     onSealPermanent = viewModel::sealAndEnforceLockdown,
                     onSyncNow = viewModel::syncBlocklistsNow,
@@ -186,6 +193,55 @@ fun BlockerRootScreen(
 }
 
 @Composable
+private fun EmergencyRecoveryScreen() {
+    Scaffold { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmberContainer),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = AmberWarning,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Mode Récupération d'Urgence Actif",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Cette mise à jour GitHub (v${BuildConfig.VERSION_NAME}) a désactivé proprement tous les verrous Blocker :\n\n" +
+                            "• VPN DNS arrêté (connexion native restaurée)\n" +
+                            "• Service d'Accessibilité désactivé\n" +
+                            "• Administrateur d'appareil & Device Owner libérés\n" +
+                            "• Restrictions système et navigateurs supprimées\n\n" +
+                            "Vous pouvez maintenant désinstaller Blocker normalement ou pousser une version normale corrigée sur GitHub.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.92f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DashboardTab(
     status: ProtectionStatus,
     isSealed: Boolean,
@@ -201,6 +257,7 @@ private fun DashboardTab(
     isCheckingUpdate: Boolean,
     onRequestStartVpn: () -> Unit,
     onRequestDeviceAdmin: () -> Unit,
+    onRequestBatteryUnrestricted: () -> Unit,
     onRefreshStatus: () -> Unit,
     onSealPermanent: () -> Unit,
     onSyncNow: () -> Unit,
@@ -549,9 +606,47 @@ private fun DashboardTab(
             }
         }
 
-        // 3b. Real-Time In-App Guard (Reddit, X, Browsers, Social Apps) Activation Card
+        // 3b. Samsung One UI Anti-Deep-Sleep Battery Optimization Card (Galaxy A55)
+        if (!status.isBatteryOptimizationIgnored) {
+            item(key = "samsung_battery") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceVariantDark),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Optimisation Samsung Galaxy A55 (Anti-Veille Profonde)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Empêche Maintenance de l'appareil (One UI) de mettre Blocker en veille profonde ou de couper le bouclier DNS en arrière-plan.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onRequestBatteryUnrestricted,
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Autoriser Batterie Non Restreinte (1 clic)",
+                                color = Color.Black,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3c. Real-Time In-App Guard (Reddit, X, Browsers, Social Apps) Activation Card
         if (!status.isAccessibilityGuardEnabled) {
-            item {
+            item(key = "a11y_card") {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = AmberContainer),
                     shape = RoundedCornerShape(16.dp),
@@ -591,7 +686,7 @@ private fun DashboardTab(
         }
 
         // 4. Protection Layers Checklist
-        item {
+        item(key = "checklist") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                 shape = RoundedCornerShape(16.dp),
@@ -618,6 +713,7 @@ private fun DashboardTab(
                     ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", vpnRunning && (status.isAccessibilityGuardEnabled || status.isDeviceOwner))
                     ProtectionCheckRow("SafeSearch forcé (Google, Bing, DDG, Brave)", vpnRunning)
                     ProtectionCheckRow("DNS Amont Adulte (1.1.1.3 / CleanBrowsing Adult / OpenDNS)", vpnRunning)
+                    ProtectionCheckRow("Batterie illimitée (Anti-Veille Profonde Samsung)", status.isBatteryOptimizationIgnored)
                     ProtectionCheckRow("Immunité totale : poseidon-scan.net", true)
                     ProtectionCheckRow("Anti-Mode Sans Échec & Multi-Utilisateurs", status.isSafeBootLocked && status.isMultiUserLocked)
                     ProtectionCheckRow(
@@ -637,7 +733,7 @@ private fun DashboardTab(
         }
 
         // 5. Masked Blocked Activity Log
-        item {
+        item(key = "log_header") {
             Text(
                 text = "Journal des blocages récents (domaines masqués)",
                 style = MaterialTheme.typography.titleSmall,
@@ -647,7 +743,7 @@ private fun DashboardTab(
         }
 
         if (recentEvents.isEmpty()) {
-            item {
+            item(key = "log_empty") {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(14.dp),
@@ -662,7 +758,10 @@ private fun DashboardTab(
                 }
             }
         } else {
-            items(recentEvents.take(20)) { event ->
+            items(
+                items = recentEvents.take(20),
+                key = { "${it.timestampMs}_${it.maskedDomain}_${it.reason}" }
+            ) { event ->
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(12.dp),
@@ -802,7 +901,7 @@ private fun CustomDomainsTab(
         }
 
         if (customDomains.isEmpty()) {
-            item {
+            item(key = "custom_empty") {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(14.dp),
@@ -817,7 +916,7 @@ private fun CustomDomainsTab(
                 }
             }
         } else {
-            items(customDomains) { domain ->
+            items(items = customDomains, key = { it }) { domain ->
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(12.dp),
@@ -897,7 +996,7 @@ private fun HardeningTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
+        item(key = "hardening_intro") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceVariantDark),
                 shape = RoundedCornerShape(16.dp),
@@ -911,7 +1010,7 @@ private fun HardeningTab(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Chaque verrou activé ici est à sens unique (irréversible). Les blocages Reddit, X et Mihon Mixtes fonctionnent immédiatement SANS PC.",
+                        text = "Chaque verrou activé ici est à sens unique (irréversible). Les blocages Reddit, X, Mihon Mixtes et Dossier Sécurisé Samsung fonctionnent immédiatement SANS PC.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -919,7 +1018,7 @@ private fun HardeningTab(
             }
         }
 
-        item {
+        item(key = "lock_reddit") {
             OneWayHardeningCard(
                 title = "Bloquer Reddit intégralement (site + app)",
                 description = "Bloque tout reddit.com / redd.it au niveau DNS et empêche l'ouverture de l'app Reddit (fonctionne sans PC).",
@@ -931,7 +1030,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_x") {
             OneWayHardeningCard(
                 title = "Bloquer X / Twitter intégralement (site + app)",
                 description = "Bloque tout x.com / twitter.com / twimg.com au niveau DNS et empêche l'ouverture de l'app X (fonctionne sans PC).",
@@ -943,7 +1042,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_mihon_mixed") {
             OneWayHardeningCard(
                 title = "Bloquer aussi les extensions Mihon Mixtes (Keiyoushi cw=2)",
                 description = "Les 494+ extensions 18+ (cw=3) et Comick sont déjà bloquées par défaut. Ce verrou bloque en plus les sources mixtes (MangaDex, Bato, etc.) — fonctionne sans PC.",
@@ -955,7 +1054,19 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_samsung_secure_folder") {
+            OneWayHardeningCard(
+                title = "Bloquer le Dossier Sécurisé Samsung (Secure Folder)",
+                description = "Empêche d'ouvrir le Dossier Sécurisé Knox sur Galaxy A55 (évite un profil secondaire hors VPN Blocker — fonctionne sans PC).",
+                isLocked = hardening.lockSamsungSecureFolder,
+                enabled = true,
+                onRequestLock = {
+                    pendingOption = HardeningOption.LOCK_SAMSUNG_SECURE_FOLDER to "Bloquer le Dossier Sécurisé Samsung (Secure Folder)"
+                }
+            )
+        }
+
+        item(key = "lock_incognito") {
             OneWayHardeningCard(
                 title = "Désactiver la navigation privée Chrome (Device Owner)",
                 description = "Force IncognitoModeAvailability = 1 sur Chrome, Edge, Brave et Vivaldi (nécessite Device Owner).",
@@ -967,7 +1078,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_unknown_sources") {
             OneWayHardeningCard(
                 title = "Bloquer l'installation d'APK externes (anti-Tor APK)",
                 description = "Active automatiquement avec Device Owner (DISALLOW_INSTALL_UNKNOWN_SOURCES_GLOBALLY).",
@@ -979,7 +1090,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_all_installs") {
             OneWayHardeningCard(
                 title = "Bloquer TOUTE nouvelle installation d'apps (Play Store)",
                 description = "Active DISALLOW_INSTALL_APPS : empêche d'installer n'importe quelle nouvelle application (à activer seulement une fois toutes vos apps installées).",
@@ -991,7 +1102,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_adb") {
             OneWayHardeningCard(
                 title = "Verrouiller ADB & Options Développeur",
                 description = "Active DISALLOW_DEBUGGING_FEATURES. Empêche toute commande ADB depuis un PC (activez-le en dernier, une fois vos tests terminés).",
@@ -1003,7 +1114,7 @@ private fun HardeningTab(
             )
         }
 
-        item {
+        item(key = "lock_factory_reset") {
             OneWayHardeningCard(
                 title = "Bloquer la réinitialisation dans Paramètres",
                 description = "Active DISALLOW_FACTORY_RESET dans les paramètres Android (attention : seule la récupération matérielle restera possible).",

@@ -17,6 +17,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.blocker.app.BlockerApp
+import com.blocker.app.BuildConfig
 import com.blocker.app.MainActivity
 import com.blocker.app.R
 import com.blocker.app.admin.DeviceOwnerController
@@ -70,6 +71,12 @@ class BlockerVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (BuildConfig.EMERGENCY_DISABLE || intent?.action == ACTION_EMERGENCY_STOP && BuildConfig.EMERGENCY_DISABLE) {
+            teardownVpn()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startForegroundSafe()
         if (vpnInterface == null) {
             establishVpn()
@@ -381,16 +388,30 @@ class BlockerVpnService : VpnService() {
         private const val TAG = "BlockerVpnService"
         private const val CHANNEL_ID = "blocker_vpn_protection"
         private const val NOTIFICATION_ID = 1001
+        private const val ACTION_EMERGENCY_STOP = "com.blocker.app.ACTION_EMERGENCY_STOP"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
         fun start(context: Context) {
+            if (BuildConfig.EMERGENCY_DISABLE) return
             val intent = Intent(context, BlockerVpnService::class.java)
             try {
                 context.startForegroundService(intent)
             } catch (e: Exception) {
                 Log.w(TAG, "Unable to start VPN foreground service: ${e.message}")
+            }
+        }
+
+        fun stopForEmergency(context: Context) {
+            if (!BuildConfig.EMERGENCY_DISABLE) return
+            try {
+                val intent = Intent(context, BlockerVpnService::class.java).apply {
+                    action = ACTION_EMERGENCY_STOP
+                }
+                context.startService(intent)
+            } catch (_: Exception) {
+                runCatching { context.stopService(Intent(context, BlockerVpnService::class.java)) }
             }
         }
     }

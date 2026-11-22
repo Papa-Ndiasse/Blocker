@@ -25,6 +25,7 @@ enum class HardeningOption {
     LOCK_REDDIT_TOTAL,
     LOCK_X_TOTAL,
     LOCK_MIHON_MIXED,
+    LOCK_SAMSUNG_SECURE_FOLDER,
     LOCK_FACTORY_RESET
 }
 
@@ -158,6 +159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val sync = app.blocklistRepository.syncRemoteBlocklists()
                     if (sync.success) app.reloadFilterEngine()
                 }
+                HardeningOption.LOCK_SAMSUNG_SECURE_FOLDER -> app.preferences.latchSamsungSecureFolderLock()
                 HardeningOption.LOCK_FACTORY_RESET -> app.preferences.latchFactoryResetLock()
             }
             if (controller.isDeviceOwner()) {

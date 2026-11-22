@@ -2,6 +2,7 @@ package com.blocker.app.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.blocker.app.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +23,7 @@ data class HardeningFlags(
     val lockRedditEntirely: Boolean = false,
     val lockXEntirely: Boolean = false,
     val lockMihonMixedExtensions: Boolean = false,
+    val lockSamsungSecureFolder: Boolean = false,
     val lockFactoryResetSettings: Boolean = false
 )
 
@@ -90,32 +92,40 @@ class BlockerPreferences(context: Context) {
             lockRedditEntirely = prefs.getBoolean(KEY_LOCK_REDDIT, false),
             lockXEntirely = prefs.getBoolean(KEY_LOCK_X, false),
             lockMihonMixedExtensions = prefs.getBoolean(KEY_LOCK_MIHON_MIXED, false),
+            lockSamsungSecureFolder = prefs.getBoolean(KEY_LOCK_SECURE_FOLDER, false),
             lockFactoryResetSettings = prefs.getBoolean(KEY_LOCK_FACTORY_RESET, false)
         )
     }
+
+    private var lastDiskFlushMs: Long = 0L
 
     @Synchronized
     fun recordBlocked(domain: String, reason: String) {
         val today = LocalDate.now().toString()
         val storedDate = prefs.getString(KEY_TODAY_DATE, "")
-        val newTotal = prefs.getLong(KEY_TOTAL_BLOCKED, 0L) + 1L
+        val newTotal = _totalBlocked.value + 1L
         val newToday = if (storedDate == today) {
-            prefs.getLong(KEY_TODAY_BLOCKED, 0L) + 1L
+            _todayBlocked.value + 1L
         } else {
             1L
         }
 
-        prefs.edit()
-            .putLong(KEY_TOTAL_BLOCKED, newTotal)
-            .putString(KEY_TODAY_DATE, today)
-            .putLong(KEY_TODAY_BLOCKED, newToday)
-            .apply()
-
         _totalBlocked.value = newTotal
         _todayBlocked.value = newToday
 
+        // Throttle disk persistence to at most once every 2s during burst blocks (saves battery/UFS wear on A55)
+        val now = System.currentTimeMillis()
+        if (storedDate != today || now - lastDiskFlushMs >= 2_000L) {
+            lastDiskFlushMs = now
+            prefs.edit()
+                .putLong(KEY_TOTAL_BLOCKED, newTotal)
+                .putString(KEY_TODAY_DATE, today)
+                .putLong(KEY_TODAY_BLOCKED, newToday)
+                .apply()
+        }
+
         val event = BlockedEvent(
-            timestampMs = System.currentTimeMillis(),
+            timestampMs = now,
             maskedDomain = maskDomain(domain),
             reason = reason
         )
@@ -207,8 +217,30 @@ class BlockerPreferences(context: Context) {
     }
 
     @Synchronized
+    fun latchSamsungSecureFolderLock() {
+        prefs.edit().putBoolean(KEY_LOCK_SECURE_FOLDER, true).apply()
+        _hardening.value = loadHardeningFlags()
+    }
+
+    @Synchronized
     fun latchFactoryResetLock() {
         prefs.edit().putBoolean(KEY_LOCK_FACTORY_RESET, true).apply()
+        _hardening.value = loadHardeningFlags()
+    }
+
+    /**
+     * Strictly gated by compile-time BuildConfig.EMERGENCY_DISABLE: cannot ever run
+     * in a normal release build, only in an emergency GitHub recovery update.
+     */
+    @Synchronized
+    fun clearSealForEmergency() {
+        if (!BuildConfig.EMERGENCY_DISABLE) return
+        prefs.edit()
+            .putBoolean(KEY_SEALED, false)
+            .putBoolean(KEY_LOCK_REDDIT, false)
+            .putBoolean(KEY_LOCK_X, false)
+            .putBoolean(KEY_LOCK_SECURE_FOLDER, false)
+            .apply()
         _hardening.value = loadHardeningFlags()
     }
 
@@ -230,6 +262,7 @@ class BlockerPreferences(context: Context) {
         private const val KEY_LOCK_REDDIT = "lock_reddit_total"
         private const val KEY_LOCK_X = "lock_x_total"
         private const val KEY_LOCK_MIHON_MIXED = "lock_mihon_mixed"
+        private const val KEY_LOCK_SECURE_FOLDER = "lock_samsung_secure_folder"
         private const val KEY_LOCK_FACTORY_RESET = "lock_factory_reset"
         private const val MAX_RECENT_EVENTS = 50
 

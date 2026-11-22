@@ -16,6 +16,10 @@ val resolvedUpdateToken = (System.getenv("GITHUB_UPDATE_TOKEN")
     ?: (project.findProperty("githubUpdateToken") as? String)
     ?: "").replace("\"", "\\\"")
 
+val resolvedEmergencyDisable = (System.getenv("EMERGENCY_DISABLE")
+    ?: (project.findProperty("emergencyDisable") as? String)
+    ?: "false").equals("true", ignoreCase = true)
+
 val keystorePath = System.getenv("SIGNING_KEYSTORE_PATH")
     ?: (project.findProperty("signingKeystorePath") as? String)
 
@@ -32,6 +36,7 @@ android {
 
         buildConfigField("String", "GITHUB_REPO", "\"Papa-Ndiasse/Blocker\"")
         buildConfigField("String", "GITHUB_UPDATE_TOKEN", "\"$resolvedUpdateToken\"")
+        buildConfigField("boolean", "EMERGENCY_DISABLE", resolvedEmergencyDisable.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,7 +57,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 code & resource shrinking: reduces APK from ~41 MB to ~6 MB and cuts RAM/startup overhead on Galaxy A55
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

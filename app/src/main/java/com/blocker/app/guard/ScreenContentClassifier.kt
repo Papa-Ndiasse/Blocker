@@ -58,6 +58,7 @@ object ScreenContentClassifier {
         "org.mozilla.firefox_beta",
         "org.mozilla.focus",
         "com.sec.android.app.sbrowser",
+        "com.sec.android.app.sbrowser.beta",
         "com.vivaldi.browser",
         "com.duckduckgo.mobile.android"
     )
@@ -105,10 +106,14 @@ object ScreenContentClassifier {
     val SETTINGS_PACKAGES = setOf(
         "com.android.settings",
         "com.samsung.android.settings",
+        "com.samsung.accessibility",
+        "com.samsung.android.lool",
         "com.miui.securitycenter",
         "com.coloros.safecenter",
         "com.oplus.safecenter"
     )
+
+    const val SAMSUNG_SECURE_FOLDER_PKG = "com.samsung.knox.securefolder"
 
     private val EXPLICIT_SEARCH_AND_URL_REGEX = Regex(
         "\\b(" + listOf(
@@ -204,18 +209,20 @@ object ScreenContentClassifier {
         "psiphon"
     )
 
-    // Settings screens that allow tampering with Blocker itself
+    // Settings screens that allow tampering with Blocker itself (Stock Android + Samsung One UI 6.1/7.0)
     private val BLOCKER_TAMPER_KEYWORDS = listOf(
-        // Accessibility
+        // Accessibility (Stock + One UI)
         "accessibilit", "raccourci", "shortcut", "utiliser blocker", "use blocker",
-        // Device Admin
-        "administrateur", "device admin", "désactiver cette appli",
+        "applications installées", "installed apps", "services installés",
+        // Device Admin (Stock + One UI)
+        "administrateur", "admin. de l'appareil", "device admin", "désactiver cette appli",
         "deactivate this device admin", "désactiver l'appli", "deactivate", "révoquer", "revoke",
-        // App Info / Force Stop / Uninstall / Clear Storage
+        // App Info / Force Stop / Uninstall / Clear Storage / Samsung Deep Sleep
         "forcer l'arrêt", "force stop", "désinstaller", "uninstall",
         "effacer les données", "effacer le stockage", "clear data", "clear storage",
         "supprimer les données", "infos sur l'appli", "app info",
-        "informations sur l'application", "arrêter", "stop service", "turn off", "désactiver"
+        "informations sur l'application", "mise en veille profonde", "deep sleeping",
+        "arrêter", "stop service", "turn off", "désactiver"
     )
 
     private val VPN_SETTINGS_TAMPER_KEYWORDS = listOf(
@@ -253,12 +260,13 @@ object ScreenContentClassifier {
 
     /**
      * Checks if launching [packageName] directly is forbidden (Tor apps, proxy browsers,
-     * or Reddit/X if the user activated their total one-way lock).
+     * Samsung Secure Folder if latched, or Reddit/X if the user activated their total one-way lock).
      */
     fun classifyLaunchedPackage(
         packageName: String,
         lockRedditEntirely: Boolean = false,
-        lockXEntirely: Boolean = false
+        lockXEntirely: Boolean = false,
+        lockSamsungSecureFolder: Boolean = false
     ): ScreenBlockMatch? {
         if (packageName == "com.blocker.app") return null
 
@@ -268,6 +276,14 @@ object ScreenContentClassifier {
             return ScreenBlockMatch(
                 reason = REASON_TOR_OR_PROXY,
                 detail = packageName,
+                goHomeImmediately = true
+            )
+        }
+
+        if (lockSamsungSecureFolder && packageName == SAMSUNG_SECURE_FOLDER_PKG) {
+            return ScreenBlockMatch(
+                reason = REASON_LOCKED_PLATFORM,
+                detail = "samsung-secure-folder",
                 goHomeImmediately = true
             )
         }

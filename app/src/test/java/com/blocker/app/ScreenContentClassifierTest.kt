@@ -156,4 +156,53 @@ class ScreenContentClassifierTest {
         assertNotNull(ScreenContentClassifier.classifyLaunchedPackage("com.reddit.android", lockRedditEntirely = true))
         assertNotNull(ScreenContentClassifier.classifyLaunchedPackage("com.twitter.android", lockXEntirely = true))
     }
+
+    @Test
+    fun `protects Samsung Galaxy A55 One UI Accessibility, Device Care Deep Sleep, Secure Folder, and allows self-update`() {
+        val samsungA11yTamper = ScreenContentClassifier.classifyAppText(
+            "com.samsung.accessibility",
+            listOf("Applications installées", "Blocker", "Activé"),
+            isSealed = true
+        )
+        assertNotNull(samsungA11yTamper)
+        assertTrue(samsungA11yTamper!!.isSettingsTamper)
+
+        val samsungDeepSleepTamper = ScreenContentClassifier.classifyAppText(
+            "com.samsung.android.lool",
+            listOf("Batterie", "Mise en veille profonde", "Blocker"),
+            isSealed = true
+        )
+        assertNotNull(samsungDeepSleepTamper)
+        assertTrue(samsungDeepSleepTamper!!.isSettingsTamper)
+
+        assertNull(
+            ScreenContentClassifier.classifyLaunchedPackage(
+                ScreenContentClassifier.SAMSUNG_SECURE_FOLDER_PKG,
+                lockSamsungSecureFolder = false
+            )
+        )
+        val secureFolderLocked = ScreenContentClassifier.classifyLaunchedPackage(
+            ScreenContentClassifier.SAMSUNG_SECURE_FOLDER_PKG,
+            lockSamsungSecureFolder = true
+        )
+        assertNotNull(secureFolderLocked)
+        assertTrue(secureFolderLocked!!.goHomeImmediately)
+
+        // Samsung PackageInstaller must allow updating Blocker (for auto-updates & emergency recovery!)
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.samsung.android.packageinstaller",
+                listOf("Blocker", "Voulez-vous mettre à jour cette application ?", "Mettre à jour"),
+                isSealed = true
+            )
+        )
+        // But uninstalling Blocker via Samsung PackageInstaller must remain blocked when sealed
+        val uninstallTamper = ScreenContentClassifier.classifyAppText(
+            "com.samsung.android.packageinstaller",
+            listOf("Blocker", "Voulez-vous désinstaller cette application ?", "OK"),
+            isSealed = true
+        )
+        assertNotNull(uninstallTamper)
+        assertTrue(uninstallTamper!!.isSettingsTamper)
+    }
 }

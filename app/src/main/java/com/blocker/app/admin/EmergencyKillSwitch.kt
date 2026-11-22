@@ -40,8 +40,11 @@ object EmergencyKillSwitch {
         // 2. Disable Accessibility Service if running
         BlockerAccessibilityService.disableForEmergency()
 
-        // 3. Reset sealed state in Device-Protected preferences
+        // 3. Reset sealed state in Device-Protected preferences & cancel watchdog worker
         (appContext as? BlockerApp)?.preferences?.clearSealForEmergency()
+        runSafely("cancelWatchdog") {
+            com.blocker.app.worker.ProtectionWatchdogWorker.cancel(appContext)
+        }
 
         // 4. Lift all Device Owner & Device Admin locks cleanly
         val dpm = appContext.getSystemService(DevicePolicyManager::class.java)

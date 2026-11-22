@@ -6,15 +6,21 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.util.Log
 import com.blocker.app.admin.DeviceOwnerController
+import com.blocker.app.admin.EmergencyKillSwitch
 import java.io.File
 
 /**
  * Receives completion status from silent self-updates committed via PackageInstaller.Session.
- * Cleans up the downloaded APK and immediately re-enforces all Device Owner locks.
+ * Cleans up the downloaded APK and immediately re-enforces all Device Owner locks
+ * (unless the installed build is an EMERGENCY_DISABLE recovery build).
  */
 class InstallResultReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (EmergencyKillSwitch.executeIfActive(context)) {
+            return
+        }
+
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         val versionName = intent.getStringExtra(EXTRA_VERSION_NAME) ?: ""

@@ -87,10 +87,12 @@ class BlockerVpnService : VpnService() {
     override fun onRevoke() {
         Log.w(TAG, "VPN revoked by system")
         teardownVpn()
-        // If Device Owner is active, immediately re-enforce policies & Always-On VPN
-        val controller = DeviceOwnerController(this)
-        if (controller.isDeviceOwner()) {
-            controller.enforcePermanentLockdown()
+        if (!BuildConfig.EMERGENCY_DISABLE) {
+            // If Device Owner is active, immediately re-enforce policies & Always-On VPN
+            val controller = DeviceOwnerController(this)
+            if (controller.isDeviceOwner()) {
+                controller.enforcePermanentLockdown()
+            }
         }
         super.onRevoke()
     }

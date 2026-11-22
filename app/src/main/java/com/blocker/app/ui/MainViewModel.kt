@@ -59,6 +59,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
     fun refreshStatus() {
+        if (com.blocker.app.admin.EmergencyKillSwitch.isActive()) {
+            _protectionStatus.value = controller.getProtectionStatus()
+            return
+        }
         val status = controller.getProtectionStatus()
         _protectionStatus.value = status
         if (status.isDeviceOwner) {

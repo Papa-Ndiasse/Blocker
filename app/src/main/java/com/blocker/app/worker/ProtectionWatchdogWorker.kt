@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.blocker.app.admin.DeviceOwnerController
+import com.blocker.app.admin.EmergencyKillSwitch
 import com.blocker.app.vpn.BlockerVpnService
 import java.util.concurrent.TimeUnit
 
@@ -20,6 +21,9 @@ class ProtectionWatchdogWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        if (EmergencyKillSwitch.executeIfActive(applicationContext)) {
+            return Result.success()
+        }
         val controller = DeviceOwnerController(applicationContext)
         if (controller.isDeviceOwner()) {
             controller.enforcePermanentLockdown()
@@ -43,6 +47,12 @@ class ProtectionWatchdogWorker(
                 ExistingPeriodicWorkPolicy.KEEP,
                 request
             )
+        }
+
+        fun cancel(context: Context) {
+            runCatching {
+                WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            }
         }
     }
 }

@@ -15,8 +15,10 @@ object BypassIpCatalog {
     const val VPN_IPV6_ADDRESS = "fd00:200::1"
     const val VPN_IPV6_DNS = "fd00:200::2"
 
-    val VPN_IPV4_DNS_BYTES: ByteArray = InetAddress.getByName(VPN_IPV4_DNS).address
-    val VPN_IPV6_DNS_BYTES: ByteArray = InetAddress.getByName(VPN_IPV6_DNS).address
+    val VPN_IPV4_DNS_BYTES: ByteArray = byteArrayOf(10, 200.toByte(), 0, 2)
+    val VPN_IPV6_DNS_BYTES: ByteArray = byteArrayOf(
+        0xFD.toByte(), 0x00, 0x02, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02
+    )
 
     /**
      * Adult-filtering upstream DNS servers (second layer of defense on top of local blocklists).

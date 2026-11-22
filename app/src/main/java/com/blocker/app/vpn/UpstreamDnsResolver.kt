@@ -35,8 +35,12 @@ class UpstreamDnsResolver(
 
     private val safeSearchVipCache = ConcurrentHashMap<String, CachedIps>()
 
-    private val upstreamAddresses: List<InetAddress> =
-        BypassIpCatalog.FAMILY_UPSTREAM_DNS_IPV4.map { InetAddress.getByName(it) }
+    // Initialized lazily on worker thread (never on VpnService.onCreate main thread)
+    private val upstreamAddresses: List<InetAddress> by lazy {
+        (BypassIpCatalog.FAMILY_UPSTREAM_DNS_IPV4 + "2606:4700:4700::1113").mapNotNull { host ->
+            runCatching { InetAddress.getByName(host) }.getOrNull()
+        }
+    }
 
     // Adaptive index of the last upstream that responded cleanly (avoids retrying a dead server on every query)
     private val preferredUpstreamIdx = AtomicInteger(0)
@@ -82,19 +86,18 @@ class UpstreamDnsResolver(
     }
 
     private fun queryUpstreams(queryBytes: ByteArray): ByteArray? {
-        val count = upstreamAddresses.size
+        val addrs = upstreamAddresses
+        if (addrs.isEmpty()) return null
+        val count = addrs.size
         val startIdx = preferredUpstreamIdx.get() % count
 
         for (offset in 0 until count) {
             val idx = (startIdx + offset) % count
-            val upstream = upstreamAddresses[idx]
+            val upstream = addrs[idx]
             var socket: DatagramSocket? = null
             try {
                 socket = DatagramSocket()
-                if (!vpnService.protect(socket)) {
-                    Log.w(TAG, "VpnService.protect failed for socket")
-                    continue
-                }
+                runCatching { vpnService.protect(socket) }
                 socket.soTimeout = UPSTREAM_TIMEOUT_MS
                 val sendPacket = DatagramPacket(queryBytes, queryBytes.size, upstream, DNS_PORT)
                 socket.send(sendPacket)

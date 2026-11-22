@@ -28,37 +28,41 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
 /**
- * Local Always-On DNS Filtering VPN Service.
+ * Local Always-On DNS Filtering VPN Service — hardened for Samsung Galaxy A55 / One UI (Android 14-16).
  *
- * Routes ONLY:
- *   1. Virtual DNS server (10.200.0.2/32 and fd00:200::2/128) -> filtered by DnsFilterEngine
- *   2. Public unfiltered DNS/DoH/DoT resolver IPs -> immediately rejected (TCP RST / dropped)
- *
- * Also dynamically monitors package installs (ACTION_PACKAGE_ADDED + PackageInstaller.SessionCallback)
- * so Tor Browser / Orbot / Tor clones are intercepted and silently uninstalled in real time on Android 8+.
- *
- * Intentionally exposes NO stop action: once active with Device Owner + DISALLOW_CONFIG_VPN,
- * it runs permanently across reboots and Direct Boot.
+ * Key stability design for Samsung One UI / Exynos:
+ *   - All TUN creation, teardown, and blocklist loading run off the Main Thread (zero ANR)
+ *   - Clean single IPv4 /24 subnet (`10.200.0.1/24`) with on-link virtual DNS (`10.200.0.2/32`)
+ *     and NO multi-dozen blackhole host routes or IPv6 ULA routes that break Samsung Wi-Fi
+ *     connectivity monitors (`SemWifiConnectivityMonitor`) or trigger netd/SystemUI instabilities
+ *   - Marks tunnel unmetered (`setMetered(false)`) and excludes `com.android.systemui` &
+ *     `com.sec.android.app.launcher` (One UI Home) so Samsung UI can never stall on DNS
+ *   - Fixed 8-worker bounded Channel (128 slots) prevents unbounded coroutine/RAM spikes during bursts
+ *   - Serialized TUN lifecycle (`vpnLock`) ensures two TUN FDs are never opened concurrently
  */
 class BlockerVpnService : VpnService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val queryConcurrency = Semaphore(64)
+    private val vpnLock = Any()
     private val tunWriteLock = Any()
 
+    @Volatile
     private var vpnInterface: ParcelFileDescriptor? = null
+
     private var readerJob: Job? = null
+    private var workerJobs: List<Job> = emptyList()
+    private var packetChannel: Channel<ParsedIpPacket.Udp>? = null
     private var upstreamResolver: UpstreamDnsResolver? = null
     private var dynamicPackageReceiver: PackageInstallReceiver? = null
     private var installSessionCallback: PackageInstaller.SessionCallback? = null
@@ -67,31 +71,41 @@ class BlockerVpnService : VpnService() {
         super.onCreate()
         createNotificationChannel()
         upstreamResolver = UpstreamDnsResolver(this)
-        registerRealtimeInstallMonitors()
+        // Only register heavy system-wide package install monitors when Device Owner is active
+        if (runCatching { DeviceOwnerController(this).isDeviceOwner() }.getOrDefault(false)) {
+            registerRealtimeInstallMonitors()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (BuildConfig.EMERGENCY_DISABLE || intent?.action == ACTION_EMERGENCY_STOP && BuildConfig.EMERGENCY_DISABLE) {
-            teardownVpn()
-            stopForeground(STOP_FOREGROUND_REMOVE)
+        if (BuildConfig.EMERGENCY_DISABLE ||
+            (intent?.action == ACTION_EMERGENCY_STOP && BuildConfig.EMERGENCY_DISABLE)
+        ) {
+            serviceScope.launch { teardownVpn() }
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             stopSelf()
             return START_NOT_STICKY
         }
+
+        // Foreground notification must be posted immediately on Main Thread (<1ms)
         startForegroundSafe()
-        if (vpnInterface == null) {
-            establishVpn()
+
+        // Establish TUN & load filter engine off the Main Thread so One UI / SystemUI never stalls
+        serviceScope.launch {
+            establishVpnSafely()
         }
         return START_STICKY
     }
 
     override fun onRevoke() {
         Log.w(TAG, "VPN revoked by system")
-        teardownVpn()
-        if (!BuildConfig.EMERGENCY_DISABLE) {
-            // If Device Owner is active, immediately re-enforce policies & Always-On VPN
-            val controller = DeviceOwnerController(this)
-            if (controller.isDeviceOwner()) {
-                controller.enforcePermanentLockdown()
+        serviceScope.launch {
+            teardownVpn()
+            if (!BuildConfig.EMERGENCY_DISABLE) {
+                val controller = DeviceOwnerController(this@BlockerVpnService)
+                if (controller.isDeviceOwner()) {
+                    controller.enforcePermanentLockdown()
+                }
             }
         }
         super.onRevoke()
@@ -166,170 +180,182 @@ class BlockerVpnService : VpnService() {
     }
 
     private fun startForegroundSafe() {
-        val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            val notification = buildNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to enter foreground: ${e.message}")
         }
     }
 
-    private fun establishVpn() {
-        try {
-            val builder = Builder()
-                .setSession("Blocker DNS Firewall")
-                .setMtu(1500)
-                .setBlocking(true)
-                .addAddress(BypassIpCatalog.VPN_IPV4_ADDRESS, 32)
-                .addDnsServer(BypassIpCatalog.VPN_IPV4_DNS)
-                .addRoute(BypassIpCatalog.VPN_IPV4_DNS, 32)
-
-            // IPv6 virtual DNS route (falls back gracefully on IPv4-only kernels)
-            try {
-                builder
-                    .addAddress(BypassIpCatalog.VPN_IPV6_ADDRESS, 128)
-                    .addDnsServer(BypassIpCatalog.VPN_IPV6_DNS)
-                    .addRoute(BypassIpCatalog.VPN_IPV6_DNS, 128)
-            } catch (e: Exception) {
-                Log.w(TAG, "IPv6 TUN route skipped: ${e.message}")
-            }
-
-            // Route known unfiltered public DNS/DoH/DoT IPs into TUN to blackhole bypass attempts
-            for (ip in BypassIpCatalog.BLOCKED_RESOLVER_IPV4) {
-                try {
-                    builder.addRoute(ip, 32)
-                } catch (_: Exception) {
-                }
-            }
-            for (ip in BypassIpCatalog.BLOCKED_RESOLVER_IPV6) {
-                try {
-                    builder.addRoute(ip, 128)
-                } catch (_: Exception) {
-                }
-            }
-
-            // Exclude our own app so blocklist sync & protected upstream sockets never loop
-            try {
-                builder.addDisallowedApplication(packageName)
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not exclude self from VPN: ${e.message}")
-            }
-
-            val tun = builder.establish()
-            if (tun == null) {
-                Log.e(TAG, "VpnService.Builder.establish() returned null (VPN permission missing?)")
-                _isRunning.value = false
+    private fun establishVpnSafely() {
+        synchronized(vpnLock) {
+            if (BuildConfig.EMERGENCY_DISABLE) return
+            if (vpnInterface != null && readerJob?.isActive == true) {
+                // Already running cleanly — never open a second concurrent TUN (causes Samsung VPN crash!)
                 return
             }
 
-            vpnInterface = tun
-            _isRunning.value = true
-            Log.i(TAG, "Blocker local DNS VPN established")
+            // Close any stale TUN before establishing a new one
+            teardownVpnLocked()
 
-            // Refresh engine rules from latest preferences/blocklists
-            val app = application as BlockerApp
-            app.ensureFilterEngineLoaded()
+            try {
+                // Load filter engine BEFORE opening TUN so first DNS packets are filtered immediately
+                val app = application as BlockerApp
+                app.ensureFilterEngineLoaded()
 
-            startPacketLoop(tun)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to establish VPN", e)
-            _isRunning.value = false
+                val builder = Builder()
+                    .setSession("Blocker DNS")
+                    .setMtu(1500)
+                    .setBlocking(true)
+                    // Clean /24 subnet so 10.200.0.2 is strictly on-link (critical on Samsung One UI!)
+                    .addAddress(BypassIpCatalog.VPN_IPV4_ADDRESS, 24)
+                    .addDnsServer(BypassIpCatalog.VPN_IPV4_DNS)
+                    .addRoute(BypassIpCatalog.VPN_IPV4_DNS, 32)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    builder.setMetered(false)
+                }
+
+                // Exclude self and core Samsung One UI system UI packages so UI/Launcher can never stall
+                for (excludedPkg in EXCLUDED_SYSTEM_PACKAGES + packageName) {
+                    runCatching { builder.addDisallowedApplication(excludedPkg) }
+                }
+
+                val tun = builder.establish()
+                if (tun == null) {
+                    Log.e(TAG, "VpnService.Builder.establish() returned null (VPN permission missing?)")
+                    _isRunning.value = false
+                    return
+                }
+
+                vpnInterface = tun
+                _isRunning.value = true
+                Log.i(TAG, "Blocker local DNS VPN established (Samsung One UI safe mode)")
+
+                startPacketPipelineLocked(tun)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to establish VPN safely", t)
+                teardownVpnLocked()
+            }
         }
     }
 
-    private fun startPacketLoop(tun: ParcelFileDescriptor) {
-        readerJob?.cancel()
+    private fun startPacketPipelineLocked(tun: ParcelFileDescriptor) {
         val input = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
 
-        readerJob = serviceScope.launch {
-            val buffer = ByteArray(4096)
-            while (isActive && vpnInterface != null) {
-                val len = try {
-                    input.read(buffer)
-                } catch (e: Exception) {
-                    if (isActive) Log.w(TAG, "TUN read ended: ${e.message}")
-                    break
-                }
-                if (len <= 0) continue
+        val channel = Channel<ParsedIpPacket.Udp>(
+            capacity = MAX_QUEUED_DNS_PACKETS,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+        packetChannel = channel
 
-                val packet = PacketParser.parse(buffer, len) ?: continue
-                when (packet) {
-                    is ParsedIpPacket.Udp -> handleUdpPacket(packet, output)
-                    is ParsedIpPacket.TcpSyn -> handleTcpSynPacket(packet, output)
+        // Fixed small worker pool (8 workers) handles DNS bursts with minimal RAM/GC overhead
+        workerJobs = List(DNS_WORKER_COUNT) {
+            serviceScope.launch {
+                for (udp in channel) {
+                    try {
+                        processDnsUdpPacket(udp, output)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "DNS worker skipped packet: ${t.message}")
+                    }
                 }
             }
-            _isRunning.value = false
         }
-    }
 
-    private fun handleTcpSynPacket(syn: ParsedIpPacket.TcpSyn, output: FileOutputStream) {
-        // Immediately return TCP RST+ACK for:
-        // 1) Android Opportunistic Private DNS probes to our virtual DNS port 853 (<1ms UDP fallback)
-        // 2) Blocked DoH/DoT TCP attempts to blackholed resolver IPs (8.8.8.8:443, 1.1.1.1:443, etc.)
-        val rst = PacketParser.buildTcpRstResponse(syn)
-        if (rst.isNotEmpty()) {
-            writeToTun(output, rst)
-        }
-    }
-
-    private fun handleUdpPacket(udp: ParsedIpPacket.Udp, output: FileOutputStream) {
-        // Only answer DNS queries sent to our virtual DNS server IP on port 53.
-        // Packets sent to blackholed public DNS/DoH IPs (e.g. 8.8.8.8:53 or 1.1.1.1:443 QUIC) are silently dropped.
-        val isToVirtualDns = udp.dstPort == 53 && (
-            udp.dstAddress.contentEquals(BypassIpCatalog.VPN_IPV4_DNS_BYTES) ||
-                udp.dstAddress.contentEquals(BypassIpCatalog.VPN_IPV6_DNS_BYTES)
-            )
-        if (!isToVirtualDns) return
-
-        val dnsQuery = DnsCodec.parseQuery(udp.payload) ?: return
-
-        serviceScope.launch {
-            queryConcurrency.withPermit {
-                val app = application as BlockerApp
-                val decision = app.filterEngine.evaluate(dnsQuery.domain)
-                val resolver = upstreamResolver ?: return@withPermit
-
-                val dnsResponse: ByteArray? = when (decision) {
-                    is FilterDecision.Block -> {
-                        app.preferences.recordBlocked(dnsQuery.domain, decision.reason)
-                        DnsCodec.buildNxDomainResponse(udp.payload, dnsQuery)
+        readerJob = serviceScope.launch {
+            val buffer = ByteArray(4096)
+            try {
+                while (isActive && vpnInterface === tun) {
+                    val len = try {
+                        input.read(buffer)
+                    } catch (e: Exception) {
+                        if (isActive) Log.w(TAG, "TUN read ended: ${e.message}")
+                        break
                     }
+                    if (len <= 0) continue
 
-                    is FilterDecision.SafeSearchRewrite -> {
-                        when (dnsQuery.qType) {
-                            DnsCodec.TYPE_A, DnsCodec.TYPE_AAAA -> {
-                                val ips = resolver.resolveSafeSearchVip(
-                                    decision.targetHost,
-                                    dnsQuery.qType
-                                )
-                                DnsCodec.buildAddressResponse(udp.payload, dnsQuery, ips)
+                    val packet = try {
+                        PacketParser.parse(buffer, len)
+                    } catch (_: Throwable) {
+                        null
+                    } ?: continue
+
+                    when (packet) {
+                        is ParsedIpPacket.Udp -> {
+                            if (packet.dstPort == 53 &&
+                                packet.dstAddress.contentEquals(BypassIpCatalog.VPN_IPV4_DNS_BYTES)
+                            ) {
+                                channel.trySend(packet)
                             }
-                            // Suppress HTTPS/SVCB records so Chrome cannot bypass SafeSearch via IP hints
-                            DnsCodec.TYPE_HTTPS, DnsCodec.TYPE_SVCB -> {
-                                DnsCodec.buildNoDataResponse(udp.payload, dnsQuery)
-                            }
-                            else -> {
-                                resolver.forward(udp.payload, dnsQuery)
+                        }
+                        is ParsedIpPacket.TcpSyn -> {
+                            // Fast TCP RST on port 853 probes so Android opportunistic DoT falls back to UDP/53 in <1ms
+                            val rst = PacketParser.buildTcpRstResponse(packet)
+                            if (rst.isNotEmpty()) {
+                                writeToTun(output, rst)
                             }
                         }
                     }
+                }
+            } finally {
+                channel.close()
+                if (vpnInterface === tun) {
+                    _isRunning.value = false
+                }
+            }
+        }
+    }
 
-                    FilterDecision.Allow -> {
+    private fun processDnsUdpPacket(udp: ParsedIpPacket.Udp, output: FileOutputStream) {
+        val dnsQuery = DnsCodec.parseQuery(udp.payload) ?: return
+        val app = application as BlockerApp
+        val decision = app.filterEngine.evaluate(dnsQuery.domain)
+        val resolver = upstreamResolver ?: return
+
+        val dnsResponse: ByteArray? = when (decision) {
+            is FilterDecision.Block -> {
+                app.preferences.recordBlocked(dnsQuery.domain, decision.reason)
+                DnsCodec.buildNxDomainResponse(udp.payload, dnsQuery)
+            }
+
+            is FilterDecision.SafeSearchRewrite -> {
+                when (dnsQuery.qType) {
+                    DnsCodec.TYPE_A, DnsCodec.TYPE_AAAA -> {
+                        val ips = resolver.resolveSafeSearchVip(
+                            decision.targetHost,
+                            dnsQuery.qType
+                        )
+                        DnsCodec.buildAddressResponse(udp.payload, dnsQuery, ips)
+                    }
+                    // Suppress HTTPS/SVCB records so Chrome cannot bypass SafeSearch via IP hints
+                    DnsCodec.TYPE_HTTPS, DnsCodec.TYPE_SVCB -> {
+                        DnsCodec.buildNoDataResponse(udp.payload, dnsQuery)
+                    }
+                    else -> {
                         resolver.forward(udp.payload, dnsQuery)
                     }
                 }
+            }
 
-                if (dnsResponse != null && dnsResponse.isNotEmpty()) {
-                    val responsePacket = PacketParser.buildUdpResponse(udp, dnsResponse)
-                    if (responsePacket.isNotEmpty()) {
-                        writeToTun(output, responsePacket)
-                    }
-                }
+            FilterDecision.Allow -> {
+                resolver.forward(udp.payload, dnsQuery)
+            }
+        }
+
+        if (dnsResponse != null && dnsResponse.isNotEmpty()) {
+            val responsePacket = PacketParser.buildUdpResponse(udp, dnsResponse)
+            if (responsePacket.isNotEmpty()) {
+                writeToTun(output, responsePacket)
             }
         }
     }
@@ -345,8 +371,18 @@ class BlockerVpnService : VpnService() {
     }
 
     private fun teardownVpn() {
+        synchronized(vpnLock) {
+            teardownVpnLocked()
+        }
+    }
+
+    private fun teardownVpnLocked() {
         readerJob?.cancel()
         readerJob = null
+        packetChannel?.close()
+        packetChannel = null
+        workerJobs.forEach { it.cancel() }
+        workerJobs = emptyList()
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
@@ -391,6 +427,16 @@ class BlockerVpnService : VpnService() {
         private const val CHANNEL_ID = "blocker_vpn_protection"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_EMERGENCY_STOP = "com.blocker.app.ACTION_EMERGENCY_STOP"
+        private const val DNS_WORKER_COUNT = 8
+        private const val MAX_QUEUED_DNS_PACKETS = 128
+
+        // Core Samsung One UI / Android UI components that never browse web content
+        // and must remain completely unaffected by local VPN DNS transitions.
+        private val EXCLUDED_SYSTEM_PACKAGES = listOf(
+            "com.android.systemui",
+            "com.sec.android.app.launcher",
+            "com.samsung.android.honeyboard"
+        )
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()

@@ -5,12 +5,14 @@ import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.blocker.app.BlockerApp
+import com.blocker.app.admin.EmergencyKillSwitch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -23,6 +25,7 @@ class BlocklistSyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        if (EmergencyKillSwitch.isActive()) return Result.success()
         val app = applicationContext as? BlockerApp ?: return Result.failure()
         val result = app.blocklistRepository.syncRemoteBlocklists()
         return if (result.success) {
@@ -38,6 +41,7 @@ class BlocklistSyncWorker(
     companion object {
         private const val TAG = "BlocklistSyncWorker"
         private const val PERIODIC_WORK_NAME = "blocker_daily_blocklist_sync"
+        private const val INITIAL_WORK_NAME = "blocker_initial_blocklist_sync"
 
         fun scheduleDaily(context: Context) {
             val constraints = Constraints.Builder()
@@ -61,8 +65,13 @@ class BlocklistSyncWorker(
                 .build()
             val request = OneTimeWorkRequestBuilder<BlocklistSyncWorker>()
                 .setConstraints(constraints)
+                .setInitialDelay(45, TimeUnit.SECONDS)
                 .build()
-            WorkManager.getInstance(context).enqueue(request)
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                INITIAL_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
         }
     }
 }

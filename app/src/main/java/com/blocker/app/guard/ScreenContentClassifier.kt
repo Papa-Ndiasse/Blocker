@@ -1,18 +1,24 @@
 package com.blocker.app.guard
 
+import com.blocker.app.admin.DeviceOwnerController
+import com.blocker.app.admin.TorAppPolicy
 import com.blocker.app.filter.KeywordFilter
 import java.net.URLDecoder
 
 data class ScreenBlockMatch(
     val reason: String,
     val detail: String,
-    val isSettingsTamper: Boolean = false
+    val isSettingsTamper: Boolean = false,
+    val goHomeImmediately: Boolean = false
 )
 
 /**
- * Pure-Kotlin real-time classifier for browser URL bars, search queries, and in-app
- * accessibility text (Reddit, X/Twitter, Telegram, Discord, Instagram, TikTok, Pinterest,
- * Tumblr, and Android Settings anti-tamper).
+ * Pure-Kotlin real-time classifier for:
+ *   1. Browser URL bars & search queries
+ *   2. Native Reddit, X (Twitter), Mihon/Keiyoushi 18+, and social/messaging apps
+ *   3. Tor & proxy-bypass app launches AND Play Store / PackageInstaller install attempts (no PC needed!)
+ *   4. Full Settings Anti-Tamper fortress once sealed (blocks Accessibility disable, Device Admin
+ *      revocation, App Info Force-Stop/Uninstall/Clear Data, VPN disconnect, and Private DNS changes)
  */
 object ScreenContentClassifier {
 
@@ -21,7 +27,9 @@ object ScreenContentClassifier {
     const val REASON_MIHON_NSFW = "Mihon / Extension Keiyoushi 18+"
     const val REASON_BROWSER_URL = "URL / Recherche bloquée"
     const val REASON_APP_NSFW = "Contenu adulte / Limite dans app"
-    const val REASON_SETTINGS_TAMPER = "Protection anti-désactivation"
+    const val REASON_TOR_OR_PROXY = "Application Tor / Proxy bloquée"
+    const val REASON_LOCKED_PLATFORM = "Application verrouillée définitivement"
+    const val REASON_SETTINGS_TAMPER = "Protection anti-désactivation verrouillée"
 
     val MIHON_PACKAGES = setOf(
         "app.mihon",
@@ -82,10 +90,28 @@ object ScreenContentClassifier {
         "com.google.android.googlequicksearchbox"
     )
 
-    // Explicit & borderline phrases/words blocked in URLs, searches, and monitored apps
+    val STORE_AND_INSTALLER_PACKAGES = setOf(
+        "com.android.vending",
+        "com.sec.android.app.samsungapps",
+        "com.xiaomi.mipicks",
+        "org.fdroid.fdroid",
+        "com.aurora.store",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.samsung.android.packageinstaller",
+        "com.miui.packageinstaller"
+    )
+
+    val SETTINGS_PACKAGES = setOf(
+        "com.android.settings",
+        "com.samsung.android.settings",
+        "com.miui.securitycenter",
+        "com.coloros.safecenter",
+        "com.oplus.safecenter"
+    )
+
     private val EXPLICIT_SEARCH_AND_URL_REGEX = Regex(
         "\\b(" + listOf(
-            // English explicit & borderline
             "porn", "porno", "pornography", "nsfw", "xxx", "xvideos", "xnxx", "pornhub",
             "xhamster", "redtube", "youporn", "spankbang", "eporner", "chaturbate",
             "stripchat", "bongacams", "onlyfans", "fansly", "mym\\.fans", "camgirl",
@@ -96,20 +122,16 @@ object ScreenContentClassifier {
             "masturbation", "orgasm", "dildo", "vibrator", "slut", "whore", "escort",
             "gonewild", "realgirls", "celebnsfw", "leakednudes", "fappening", "thirsttrap",
             "lingerie", "boudoir", "gooning", "fap", "jerkoff", "horny", "hookup",
-            // Drawn / Hentai / Anime / Comics / Furry / 3D
             "hentai", "hanime", "nhentai", "doujin", "doujinshi", "rule34", "r34",
             "ecchi", "ahegao", "oppai", "paizuri", "futanari", "yiff", "furryporn",
             "gelbooru", "danbooru", "e621", "lewd", "waifusgonewild", "animeplot",
             "manhwa18", "pornhwa", "comick", "r-18", "r18", "eroge", "f95zone", "iwara",
             "sfmcompile", "kemono", "coomer",
-            // Asian / JAV
             "jav", "missav", "jable", "supjav", "javhd", "javguru", "javdb", "javbus",
             "av01", "avgle", "91porn", "koreanbj", "uncensoredjav", "asiansgonewild",
-            // AI Porn / Deepfake / Nudify
             "nudify", "undress", "deepnude", "clothoff", "deepfake", "civitai",
             "pornpen", "janitorai", "spicychat", "crushon", "candy\\.ai", "dreamgf",
-            // French explicit & borderline
-            "sexe", "porno", "baise", "baiser", "salope", "pute", "branlette",
+            "sexe", "baise", "baiser", "salope", "pute", "branlette",
             "sodomie", "fellation", "beurette", "plan\\s*cul", "plancul", "cul\\s*nu",
             "seins\\s*nus", "femme\\s*nue", "fille\\s*nue", "nudité", "érotique",
             "erotique", "jacquie\\s*et\\s*michel", "dorcel", "tukif", "coquine",
@@ -118,165 +140,108 @@ object ScreenContentClassifier {
         RegexOption.IGNORE_CASE
     )
 
-    // Reddit native NSFW / Mature / 18+ UI indicators (English & French) + borderline subreddits
     private val REDDIT_NSFW_INDICATORS = listOf(
-        "nsfw",
-        "18+",
-        "over 18",
-        "over18",
-        "include_over_18",
-        "plus de 18 ans",
-        "contenu pour adultes",
-        "contenu réservé aux adultes",
-        "contenu mature",
-        "mature content",
-        "adult content",
-        "confirm you're over 18",
-        "you must be 18+",
-        "show mature content",
-        "afficher le contenu pour adultes",
-        "afficher le contenu mature",
-        "afficher le contenu nsfw",
-        "blur mature",
-        "blur nsfw",
-        "flouter les images",
-        "r/gonewild",
-        "r/realgirls",
-        "r/nsfw",
-        "r/hentai",
-        "r/rule34",
-        "r/ecchi",
-        "r/onlyfans",
-        "r/asiansgonewild",
-        "r/celebnsfw",
-        "r/gentlemanboners",
-        "r/cosplaygirls",
-        "r/cosplaybutts",
-        "r/thighdeology",
-        "r/bikini",
-        "r/lingerie",
-        "r/thick",
-        "r/pawg",
-        "r/petitegonewild",
-        "r/bustypetite",
-        "r/legalteens",
-        "r/collegesluts",
-        "r/breedingmaterial",
-        "r/dirtyr4r",
-        "r/lewd",
-        "r/porn",
-        "r/boobs",
-        "r/milf",
-        "r/bdsm",
-        "r/erotica",
-        "r/jav",
-        "r/nudes",
-        "r/fap",
-        "r/cum",
-        "r/ass"
+        "nsfw", "18+", "over 18", "over18", "include_over_18",
+        "plus de 18 ans", "contenu pour adultes", "contenu réservé aux adultes",
+        "contenu mature", "mature content", "adult content",
+        "confirm you're over 18", "you must be 18+", "show mature content",
+        "afficher le contenu pour adultes", "afficher le contenu mature",
+        "afficher le contenu nsfw", "blur mature", "blur nsfw", "flouter les images",
+        "r/gonewild", "r/realgirls", "r/nsfw", "r/hentai", "r/rule34", "r/ecchi",
+        "r/onlyfans", "r/asiansgonewild", "r/celebnsfw", "r/gentlemanboners",
+        "r/cosplaygirls", "r/cosplaybutts", "r/thighdeology", "r/bikini",
+        "r/lingerie", "r/thick", "r/pawg", "r/petitegonewild", "r/bustypetite",
+        "r/legalteens", "r/collegesluts", "r/breedingmaterial", "r/dirtyr4r",
+        "r/lewd", "r/porn", "r/boobs", "r/milf", "r/bdsm", "r/erotica",
+        "r/jav", "r/nudes", "r/fap", "r/cum", "r/ass"
     )
 
-    // X (Twitter) native sensitive media warnings & settings (English & French)
     private val X_SENSITIVE_INDICATORS = listOf(
-        "potentially sensitive content",
-        "includes potentially sensitive",
-        "may include sensitive content",
-        "contenu potentiellement sensible",
-        "contenir du contenu sensible",
-        "age-restricted adult content",
-        "contenu réservé aux adultes",
-        "contenu pour adultes",
-        "sensitive media",
-        "média sensible",
-        "médias sensibles",
+        "potentially sensitive content", "includes potentially sensitive",
+        "may include sensitive content", "contenu potentiellement sensible",
+        "contenir du contenu sensible", "age-restricted adult content",
+        "contenu réservé aux adultes", "contenu pour adultes",
+        "sensitive media", "média sensible", "médias sensibles",
         "display media that may contain sensitive",
         "afficher les médias pouvant contenir",
         "mark media you post as having material",
         "adult content",
-        "#nsfw",
-        "#18+",
-        "#onlyfans",
-        "#fansly",
-        "#mym",
-        "#hentai",
-        "#r34",
-        "#rule34",
-        "#ecchi",
-        "#lewd",
-        "#jav",
-        "#nude",
-        "#nudes",
-        "#porn",
-        "#porno",
-        "#xxx",
-        "#sextape",
-        "#camgirl",
-        "#erotic",
-        "#bdsm",
-        "#fetish",
-        "#horny",
-        "#fap",
-        "#gooning",
-        "#thirsttrap",
-        "#uncensored",
-        "onlyfans.com",
-        "fansly.com",
-        "mym.fans",
-        "redgifs.com",
-        "fapello",
-        "coomer.",
-        "kemono.",
-        "erome.com"
+        "#nsfw", "#18+", "#onlyfans", "#fansly", "#mym", "#hentai", "#r34",
+        "#rule34", "#ecchi", "#lewd", "#jav", "#nude", "#nudes", "#porn",
+        "#porno", "#xxx", "#sextape", "#camgirl", "#erotic", "#bdsm",
+        "#fetish", "#horny", "#fap", "#gooning", "#thirsttrap", "#uncensored",
+        "onlyfans.com", "fansly.com", "mym.fans", "redgifs.com",
+        "fapello", "coomer.", "kemono.", "erome.com"
     )
 
     private val MIHON_NSFW_INDICATORS = listOf(
-        "18+",
-        "nsfw",
-        "hentai",
-        "smut",
-        "erotica",
-        "pornographic",
-        "doujinshi",
-        "ecchi",
-        "pornhwa",
-        "pornwha",
-        "manhwa18",
-        "r-18",
-        "r18",
-        "adult",
-        "adulte",
-        "contenu pour adultes",
-        "contenu explicite",
+        "18+", "nsfw", "hentai", "smut", "erotica", "pornographic", "doujinshi",
+        "ecchi", "pornhwa", "pornwha", "manhwa18", "r-18", "r18", "adult",
+        "adulte", "contenu pour adultes", "contenu explicite",
         "show in sources and extensions lists",
         "afficher dans les listes de sources",
-        "nhentai",
-        "e-hentai",
-        "hitomi",
-        "toonily",
-        "comick",
-        "allporncomics",
-        "ahottie",
-        "ahrigallery",
-        "akuma.moe",
-        "hentaifox",
-        "imhentai",
-        "asmhentai",
-        "pururin",
-        "tsumino",
-        "multporn",
-        "8muses"
+        "nhentai", "e-hentai", "hitomi", "toonily", "comick", "allporncomics",
+        "ahottie", "ahrigallery", "akuma.moe", "hentaifox", "imhentai",
+        "asmhentai", "pururin", "tsumino", "multporn", "8muses"
     )
 
-    private val SETTINGS_TAMPER_KEYWORDS = listOf(
-        "accessibilit",
-        "raccourci",
-        "shortcut",
-        "utiliser blocker",
-        "use blocker",
-        "désactiver",
-        "turn off",
-        "arrêter",
-        "stop service"
+    private val TOR_AND_PROXY_STORE_TERMS = listOf(
+        "tor browser",
+        "orbot",
+        "orfox",
+        "onion browser",
+        "invizible pro",
+        "ornet",
+        "tor vpn",
+        "tor proxy",
+        "dark web browser",
+        "opera mini",
+        "opera gx",
+        "opera browser",
+        "aloha browser",
+        "puffin web browser",
+        "puffin browser",
+        "psiphon"
+    )
+
+    // Settings screens that allow tampering with Blocker itself
+    private val BLOCKER_TAMPER_KEYWORDS = listOf(
+        // Accessibility
+        "accessibilit", "raccourci", "shortcut", "utiliser blocker", "use blocker",
+        // Device Admin
+        "administrateur", "device admin", "désactiver cette appli",
+        "deactivate this device admin", "désactiver l'appli", "deactivate", "révoquer", "revoke",
+        // App Info / Force Stop / Uninstall / Clear Storage
+        "forcer l'arrêt", "force stop", "désinstaller", "uninstall",
+        "effacer les données", "effacer le stockage", "clear data", "clear storage",
+        "supprimer les données", "infos sur l'appli", "app info",
+        "informations sur l'application", "arrêter", "stop service", "turn off", "désactiver"
+    )
+
+    private val VPN_SETTINGS_TAMPER_KEYWORDS = listOf(
+        "blocker dns firewall",
+        "déconnecter",
+        "disconnect",
+        "oublier le vpn",
+        "forget vpn",
+        "supprimer le profil vpn",
+        "delete vpn",
+        "vpn toujours activé",
+        "always-on vpn",
+        "bloquer les connexions sans vpn",
+        "block connections without vpn",
+        "modifier le profil vpn",
+        "edit vpn profile"
+    )
+
+    private val PRIVATE_DNS_TAMPER_KEYWORDS = listOf(
+        "dns privé",
+        "private dns",
+        "nom d'hôte du fournisseur",
+        "private dns provider hostname",
+        "dns.google",
+        "one.one.one.one",
+        "dns.quad9.net"
     )
 
     fun isImmuneUrl(rawUrl: String): Boolean {
@@ -284,6 +249,46 @@ object ScreenContentClassifier {
         val withoutScheme = decoded.removePrefix("https://").removePrefix("http://")
         val host = withoutScheme.substringBefore('/').substringBefore('?').substringBefore('#').substringBefore(':')
         return host == "poseidon-scan.net" || host.endsWith(".poseidon-scan.net")
+    }
+
+    /**
+     * Checks if launching [packageName] directly is forbidden (Tor apps, proxy browsers,
+     * or Reddit/X if the user activated their total one-way lock).
+     */
+    fun classifyLaunchedPackage(
+        packageName: String,
+        lockRedditEntirely: Boolean = false,
+        lockXEntirely: Boolean = false
+    ): ScreenBlockMatch? {
+        if (packageName == "com.blocker.app") return null
+
+        if (TorAppPolicy.isTorPackage(packageName) ||
+            packageName in DeviceOwnerController.BYPASS_PROXY_PACKAGES
+        ) {
+            return ScreenBlockMatch(
+                reason = REASON_TOR_OR_PROXY,
+                detail = packageName,
+                goHomeImmediately = true
+            )
+        }
+
+        if (lockRedditEntirely && packageName in REDDIT_PACKAGES) {
+            return ScreenBlockMatch(
+                reason = REASON_LOCKED_PLATFORM,
+                detail = "reddit",
+                goHomeImmediately = true
+            )
+        }
+
+        if (lockXEntirely && packageName in X_PACKAGES) {
+            return ScreenBlockMatch(
+                reason = REASON_LOCKED_PLATFORM,
+                detail = "x",
+                goHomeImmediately = true
+            )
+        }
+
+        return null
     }
 
     /**
@@ -299,14 +304,12 @@ object ScreenContentClassifier {
             URLDecoder.decode(trimmed, "UTF-8")
         }.getOrDefault(trimmed).lowercase()
 
-        // Extract host candidate if URL contains a dot
         val withoutScheme = decoded.removePrefix("https://").removePrefix("http://")
         val host = withoutScheme.substringBefore('/').substringBefore('?').substringBefore('#')
         if (host.contains('.') && KeywordFilter.matches(host)) {
             return ScreenBlockMatch(REASON_BROWSER_URL, host)
         }
 
-        // Check Reddit web URLs for NSFW/borderline subreddits or Over-18 gates
         if (host.contains("reddit.com") || host.contains("redd.it")) {
             for (indicator in REDDIT_NSFW_INDICATORS) {
                 if (decoded.contains(indicator)) {
@@ -315,7 +318,6 @@ object ScreenContentClassifier {
             }
         }
 
-        // Check X / Twitter web URLs for sensitive/NSFW searches or tags
         if (host.contains("x.com") || host.contains("twitter.com")) {
             for (indicator in X_SENSITIVE_INDICATORS) {
                 if (decoded.contains(indicator)) {
@@ -324,12 +326,10 @@ object ScreenContentClassifier {
             }
         }
 
-        // Check Pixiv R-18 or Tumblr tagged NSFW
         if (host.contains("pixiv.net") && (decoded.contains("r-18") || decoded.contains("r18"))) {
             return ScreenBlockMatch(REASON_BROWSER_URL, "pixiv-r18")
         }
 
-        // Check full URL path & query string for explicit/borderline terms
         val normalizedPath = decoded.replace('+', ' ').replace('_', ' ').replace('-', ' ').replace('/', ' ')
         val match = EXPLICIT_SEARCH_AND_URL_REGEX.find(normalizedPath)
         if (match != null) {
@@ -341,28 +341,87 @@ object ScreenContentClassifier {
 
     /**
      * Classifies visible text collected from an app's Accessibility tree.
+     *
+     * @param isSealed When true, enables full Settings anti-tamper protection (blocks disabling
+     *                 Accessibility, revoking Device Admin, Force Stop/Uninstall/Clear Data,
+     *                 disconnecting VPN, and changing Private DNS — all without needing PC/ADB!).
      */
-    fun classifyAppText(packageName: String, textSamples: List<String>): ScreenBlockMatch? {
+    fun classifyAppText(
+        packageName: String,
+        textSamples: List<String>,
+        isSealed: Boolean = true
+    ): ScreenBlockMatch? {
         if (textSamples.isEmpty()) return null
-
-        // Never self-block Blocker's own UI
         if (packageName == "com.blocker.app") return null
 
         val joined = textSamples.joinToString("\n").lowercase()
 
-        // 1. Anti-tamper guard in Android Settings: prevent turning off Blocker AccessibilityService
-        if (packageName == "com.android.settings" || packageName.contains("settings")) {
-            if (joined.contains("blocker") && SETTINGS_TAMPER_KEYWORDS.any { joined.contains(it) }) {
+        // 1. Play Store & Package Installer Guard: block installing Tor, proxy browsers, or uninstalling Blocker
+        if (packageName in STORE_AND_INSTALLER_PACKAGES || packageName.contains("packageinstaller")) {
+            // Prevent uninstalling Blocker via PackageInstaller (while still allowing self-updates!)
+            if (isSealed && joined.contains("blocker") &&
+                (joined.contains("désinstaller") || joined.contains("uninstall")) &&
+                !joined.contains("mettre à jour") && !joined.contains("update")
+            ) {
                 return ScreenBlockMatch(
                     reason = REASON_SETTINGS_TAMPER,
-                    detail = "settings-accessibility",
-                    isSettingsTamper = true
+                    detail = "installer-uninstall-blocker",
+                    isSettingsTamper = true,
+                    goHomeImmediately = true
                 )
+            }
+
+            // Block installing Tor / Orbot / Proxy browsers from Play Store or APK installer (works without PC!)
+            for (term in TOR_AND_PROXY_STORE_TERMS) {
+                if (joined.contains(term)) {
+                    return ScreenBlockMatch(
+                        reason = REASON_TOR_OR_PROXY,
+                        detail = term,
+                        goHomeImmediately = false
+                    )
+                }
             }
             return null
         }
 
-        // 2. Reddit native app (or Reddit web inside browser)
+        // 2. Android Settings Anti-Tamper Fortress (active once user taps "Sceller" — zero PC required!)
+        if (packageName in SETTINGS_PACKAGES || packageName.contains("settings")) {
+            // Always protect Blocker's own Accessibility toggle once enabled; protect all 5 tamper paths once sealed
+            if (joined.contains("blocker") && BLOCKER_TAMPER_KEYWORDS.any { joined.contains(it) }) {
+                val isAccessibilityPage = joined.contains("accessibilit") ||
+                    joined.contains("utiliser blocker") || joined.contains("use blocker")
+                if (isSealed || isAccessibilityPage) {
+                    return ScreenBlockMatch(
+                        reason = REASON_SETTINGS_TAMPER,
+                        detail = "settings-blocker-tamper",
+                        isSettingsTamper = true,
+                        goHomeImmediately = true
+                    )
+                }
+            }
+
+            if (isSealed) {
+                if (joined.contains("vpn") && VPN_SETTINGS_TAMPER_KEYWORDS.any { joined.contains(it) }) {
+                    return ScreenBlockMatch(
+                        reason = REASON_SETTINGS_TAMPER,
+                        detail = "settings-vpn-tamper",
+                        isSettingsTamper = true,
+                        goHomeImmediately = true
+                    )
+                }
+                if (PRIVATE_DNS_TAMPER_KEYWORDS.any { joined.contains(it) }) {
+                    return ScreenBlockMatch(
+                        reason = REASON_SETTINGS_TAMPER,
+                        detail = "settings-private-dns-tamper",
+                        isSettingsTamper = true,
+                        goHomeImmediately = true
+                    )
+                }
+            }
+            return null
+        }
+
+        // 3. Reddit native app (or Reddit web inside browser)
         if (packageName in REDDIT_PACKAGES || (packageName in BROWSER_PACKAGES && joined.contains("reddit"))) {
             for (indicator in REDDIT_NSFW_INDICATORS) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
@@ -375,7 +434,7 @@ object ScreenContentClassifier {
             }
         }
 
-        // 3. X (Twitter) native app (or X web inside browser)
+        // 4. X (Twitter) native app (or X web inside browser)
         if (packageName in X_PACKAGES || (packageName in BROWSER_PACKAGES && (joined.contains("x.com") || joined.contains("twitter")))) {
             for (indicator in X_SENSITIVE_INDICATORS) {
                 if (joined.contains(indicator)) {
@@ -388,7 +447,7 @@ object ScreenContentClassifier {
             }
         }
 
-        // 3b. Mihon / Tachiyomi / Komikku / Aniyomi (blocks 18+ extensions, 18+ settings toggle, and X genres/titles)
+        // 5. Mihon / Tachiyomi / Komikku / Aniyomi (blocks 18+ extensions, 18+ settings toggle, Comick, and X genres/titles)
         if (packageName in MIHON_PACKAGES) {
             for (indicator in MIHON_NSFW_INDICATORS) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
@@ -401,7 +460,7 @@ object ScreenContentClassifier {
             }
         }
 
-        // 4. Other monitored social/messaging/search apps (Telegram, Discord, Instagram, TikTok, Pinterest, Tumblr, Google App)
+        // 6. Other monitored social/messaging/search apps
         if (packageName in SOCIAL_MONITORED_PACKAGES) {
             for (indicator in listOf("18+", "nsfw", "contenu pour adultes", "mature content", "adult content", "potentially sensitive")) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
@@ -418,7 +477,6 @@ object ScreenContentClassifier {
     }
 
     private fun containsBoundaryOrPhrase(text: String, needle: String): Boolean {
-        // Multi-word phrases, paths (r/...), hashtags (#...), or "18+" can use substring match safely
         if (needle.contains(' ') || needle.contains('/') || needle.contains('#') || needle.contains('+')) {
             return text.contains(needle)
         }

@@ -89,7 +89,8 @@ import java.util.Locale
 @Composable
 fun BlockerRootScreen(
     viewModel: MainViewModel,
-    onRequestTestVpn: () -> Unit
+    onRequestStartVpn: () -> Unit,
+    onRequestDeviceAdmin: () -> Unit
 ) {
     val status by viewModel.protectionStatus.collectAsState()
     val vpnRunning by viewModel.vpnRunning.collectAsState()
@@ -149,6 +150,7 @@ fun BlockerRootScreen(
             when (selectedTab) {
                 0 -> DashboardTab(
                     status = status,
+                    isSealed = hardening.sealPermanentProtection,
                     vpnRunning = vpnRunning,
                     totalBlocked = totalBlocked,
                     todayBlocked = todayBlocked,
@@ -159,7 +161,8 @@ fun BlockerRootScreen(
                     recentEvents = recentEvents,
                     isSyncing = isSyncing,
                     isCheckingUpdate = isCheckingUpdate,
-                    onRequestTestVpn = onRequestTestVpn,
+                    onRequestStartVpn = onRequestStartVpn,
+                    onRequestDeviceAdmin = onRequestDeviceAdmin,
                     onRefreshStatus = viewModel::refreshStatus,
                     onSealPermanent = viewModel::sealAndEnforceLockdown,
                     onSyncNow = viewModel::syncBlocklistsNow,
@@ -185,6 +188,7 @@ fun BlockerRootScreen(
 @Composable
 private fun DashboardTab(
     status: ProtectionStatus,
+    isSealed: Boolean,
     vpnRunning: Boolean,
     totalBlocked: Long,
     todayBlocked: Long,
@@ -195,7 +199,8 @@ private fun DashboardTab(
     recentEvents: List<BlockedEvent>,
     isSyncing: Boolean,
     isCheckingUpdate: Boolean,
-    onRequestTestVpn: () -> Unit,
+    onRequestStartVpn: () -> Unit,
+    onRequestDeviceAdmin: () -> Unit,
     onRefreshStatus: () -> Unit,
     onSealPermanent: () -> Unit,
     onSyncNow: () -> Unit,
@@ -206,6 +211,39 @@ private fun DashboardTab(
     val numberFmt = remember { NumberFormat.getIntegerInstance(Locale.FRANCE) }
     var showTokenDialog by remember { mutableStateOf(false) }
     var tokenInput by remember { mutableStateOf("") }
+    var showSealConfirmDialog by remember { mutableStateOf(false) }
+
+    if (showSealConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSealConfirmDialog = false },
+            title = { Text("Sceller définitivement (sans PC) ?") },
+            text = {
+                Text(
+                    "Une fois scellé :\n" +
+                        "• Aucun bouton pour désactiver Blocker.\n" +
+                        "• L'accès aux paramètres de désinstallation, Forcer l'arrêt, Accessibilité, Administrateur, VPN et DNS Privé sera automatiquement bloqué.\n" +
+                        "• Tor, les proxys, Comick, les extensions Mihon 18+ et les contenus NSFW/limites sur Reddit & X resteront bloqués.\n\n" +
+                        "Confirmer le verrouillage permanent ?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSealPermanent()
+                        showSealConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                ) {
+                    Text("Sceller définitivement")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSealConfirmDialog = false }) {
+                    Text("Annuler")
+                }
+            }
+        )
+    }
 
     if (showTokenDialog) {
         AlertDialog(
@@ -252,9 +290,11 @@ private fun DashboardTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Hero Shield Status Card
+        // 1. Hero Shield Status Card (100% No-PC, No-Shell, No-Account-Deletion!)
         item {
-            val fullyLocked = status.isDeviceOwner && vpnRunning
+            val standaloneReady = vpnRunning && status.isDeviceAdminActive && status.isAccessibilityGuardEnabled
+            val fullyLocked = (status.isDeviceOwner && vpnRunning) || (isSealed && standaloneReady)
+
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = if (fullyLocked) EmeraldContainer else AmberContainer
@@ -285,10 +325,10 @@ private fun DashboardTab(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = when {
-                                    fullyLocked -> "Protection Permanente Active"
-                                    status.isDeviceOwner -> "Device Owner Actif — Activation..."
-                                    vpnRunning -> "Filtrage Actif (Non Verrouillé)"
-                                    else -> "Configuration Requise"
+                                    fullyLocked && status.isDeviceOwner -> "Protection Maximale Active (Device Owner)"
+                                    fullyLocked -> "Protection Permanente Active (Sans PC)"
+                                    standaloneReady -> "Prêt à sceller définitivement"
+                                    else -> "Activation en 3 clics (sans PC ni compte à supprimer)"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
@@ -297,69 +337,75 @@ private fun DashboardTab(
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = if (fullyLocked) {
-                                    "Aucune désactivation ni désinstallation possible."
+                                    "Aucune désactivation possible : désinstallation, Paramètres, VPN, DNS Privé, Tor, Mihon 18+, Comick, Reddit & X verrouillés."
                                 } else {
-                                    "Activez le mode Device Owner via ADB pour sceller le blocage définitivement."
+                                    "Activez les 3 boucliers ci-dessous directement sur le téléphone, puis scellez."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.85f)
+                                color = Color.White.copy(alpha = 0.88f)
                             )
                         }
                     }
 
-                    if (!status.isDeviceOwner) {
+                    if (!fullyLocked) {
                         Spacer(modifier = Modifier.height(14.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.Black.copy(alpha = 0.35f))
-                                .padding(12.dp)
+
+                        // Step 1: Local DNS VPN
+                        SetupStepButton(
+                            stepLabel = "1. Bouclier DNS (>1,2M sites, SafeSearch, Keiyoushi 18+, Comick)",
+                            done = vpnRunning,
+                            actionLabel = "Activer VPN",
+                            onClick = onRequestStartVpn
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Step 2: Standard Device Admin (Anti-Uninstall — 1 tap, no PC, no account removal!)
+                        SetupStepButton(
+                            stepLabel = "2. Anti-désinstallation (Admin appareil — sans supprimer de compte)",
+                            done = status.isDeviceAdminActive,
+                            actionLabel = "Activer",
+                            onClick = onRequestDeviceAdmin
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Step 3: Accessibility Guard (Blocks Reddit/X/Mihon/Tor + locks Android Settings!)
+                        SetupStepButton(
+                            stepLabel = "3. Bouclier Écran & Anti-contournement Paramètres",
+                            done = status.isAccessibilityGuardEnabled,
+                            actionLabel = "Accessibilité",
+                            onClick = {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                if (status.isDeviceOwner) {
+                                    onSealPermanent()
+                                } else {
+                                    showSealConfirmDialog = true
+                                }
+                            },
+                            enabled = standaloneReady || status.isDeviceOwner,
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
+                            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = DeviceOwnerController.ADB_SET_DEVICE_OWNER_CMD,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                color = Color(0xFFE2E8F0)
+                                text = "Sceller le verrouillage permanent (sans PC)",
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold
                             )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { copyToClipboard(context, DeviceOwnerController.ADB_SET_DEVICE_OWNER_CMD) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Copier ADB", fontSize = 12.sp)
-                            }
-                            Button(
-                                onClick = onRefreshStatus,
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = AmberWarning)
-                            ) {
-                                Text("Vérifier", color = Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                            }
-                        }
-                        if (!vpnRunning) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(
-                                onClick = onRequestTestVpn,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Démarrer le filtre DNS (mode test avant scellage)")
-                            }
                         }
                     } else if (!vpnRunning) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Button(
-                            onClick = onSealPermanent,
+                            onClick = onRequestStartVpn,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Appliquer et démarrer le bouclier permanent")
+                            Text("Relancer le bouclier DNS")
                         }
                     }
                 }
@@ -562,17 +608,17 @@ private fun DashboardTab(
                         )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
-                    ProtectionCheckRow("Propriétaire de l'appareil (Device Owner)", status.isDeviceOwner)
+                    val tamperLocked = status.isDeviceOwner || (isSealed && status.isAccessibilityGuardEnabled)
                     ProtectionCheckRow("VPN DNS local Always-On (>1,2M domaines)", vpnRunning)
-                    ProtectionCheckRow("Bouclier Écran temps réel (Reddit / X / Apps)", status.isAccessibilityGuardEnabled)
-                    ProtectionCheckRow("Anti-désinstallation Blocker", status.isUninstallBlocked)
-                    ProtectionCheckRow("Anti-Forcer l'arrêt & Effacer données", status.isUserControlDisabled)
-                    ProtectionCheckRow("Verrouillage VPN (impossible de couper)", status.isVpnConfigLocked)
-                    ProtectionCheckRow("Verrouillage DNS Privé + Anti-DoH", status.isPrivateDnsLocked)
-                    ProtectionCheckRow("Anti-Tor (APK bloqués + désinstallation silencieuse)", status.isDeviceOwner && status.isUnknownSourcesLocked)
-                    ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ (DNS + purge auto)", vpnRunning && status.isDeviceOwner)
+                    ProtectionCheckRow("Bouclier Écran temps réel (Reddit / X / Mihon / Apps)", status.isAccessibilityGuardEnabled)
+                    ProtectionCheckRow("Anti-désinstallation Blocker (Admin appareil)", status.isUninstallBlocked || status.isDeviceAdminActive)
+                    ProtectionCheckRow("Anti-Forcer l'arrêt, Accessibilité & Paramètres", status.isUserControlDisabled || tamperLocked)
+                    ProtectionCheckRow("Verrouillage VPN & DNS Privé + Anti-DoH", (status.isVpnConfigLocked && status.isPrivateDnsLocked) || tamperLocked)
+                    ProtectionCheckRow("Anti-Tor & Proxys (Play Store, lancement & DNS)", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
+                    ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", vpnRunning && (status.isAccessibilityGuardEnabled || status.isDeviceOwner))
                     ProtectionCheckRow("SafeSearch forcé (Google, Bing, DDG, Brave)", vpnRunning)
                     ProtectionCheckRow("DNS Amont Adulte (1.1.1.3 / CleanBrowsing Adult / OpenDNS)", vpnRunning)
+                    ProtectionCheckRow("Immunité totale : poseidon-scan.net", true)
                     ProtectionCheckRow("Anti-Mode Sans Échec & Multi-Utilisateurs", status.isSafeBootLocked && status.isMultiUserLocked)
                     ProtectionCheckRow(
                         "Navigateurs verrouillés (DoH=off, SafeSearch)",
@@ -865,12 +911,7 @@ private fun HardeningTab(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = if (isDeviceOwner) {
-                            "Chaque protection activée ici est verrouillée définitivement au niveau d'Android (OS). " +
-                                "Testez d'abord que tout fonctionne bien avant de verrouiller ADB."
-                        } else {
-                            "Activez d'abord le mode Device Owner via ADB dans l'onglet Bouclier pour débloquer ces verrous système."
-                        },
+                        text = "Chaque verrou activé ici est à sens unique (irréversible). Les blocages Reddit, X et Mihon Mixtes fonctionnent immédiatement SANS PC.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -880,22 +921,10 @@ private fun HardeningTab(
 
         item {
             OneWayHardeningCard(
-                title = "Désactiver la navigation privée Chrome",
-                description = "Force IncognitoModeAvailability = 1 sur Chrome, Edge, Brave et Vivaldi.",
-                isLocked = hardening.lockChromeIncognito,
-                enabled = isDeviceOwner,
-                onRequestLock = {
-                    pendingOption = HardeningOption.LOCK_CHROME_INCOGNITO to "Désactiver la navigation privée Chrome"
-                }
-            )
-        }
-
-        item {
-            OneWayHardeningCard(
                 title = "Bloquer Reddit intégralement (site + app)",
-                description = "Bloque tout reddit.com / redd.it au niveau DNS et masque l'app Reddit (risque zéro même pour les contenus limites non étiquetés).",
+                description = "Bloque tout reddit.com / redd.it au niveau DNS et empêche l'ouverture de l'app Reddit (fonctionne sans PC).",
                 isLocked = hardening.lockRedditEntirely,
-                enabled = isDeviceOwner,
+                enabled = true,
                 onRequestLock = {
                     pendingOption = HardeningOption.LOCK_REDDIT_TOTAL to "Bloquer Reddit intégralement (site + app)"
                 }
@@ -905,9 +934,9 @@ private fun HardeningTab(
         item {
             OneWayHardeningCard(
                 title = "Bloquer X / Twitter intégralement (site + app)",
-                description = "Bloque tout x.com / twitter.com / twimg.com au niveau DNS et masque l'app X (risque zéro même pour les médias limites sans avertissement).",
+                description = "Bloque tout x.com / twitter.com / twimg.com au niveau DNS et empêche l'ouverture de l'app X (fonctionne sans PC).",
                 isLocked = hardening.lockXEntirely,
-                enabled = isDeviceOwner,
+                enabled = true,
                 onRequestLock = {
                     pendingOption = HardeningOption.LOCK_X_TOTAL to "Bloquer X / Twitter intégralement (site + app)"
                 }
@@ -917,11 +946,23 @@ private fun HardeningTab(
         item {
             OneWayHardeningCard(
                 title = "Bloquer aussi les extensions Mihon Mixtes (Keiyoushi cw=2)",
-                description = "Les 494+ extensions 18+ (cw=3) et Comick sont déjà bloquées par défaut. Ce verrou bloque en plus les sources mixtes (MangaDex, Bato, etc.) et ne laisse que les sources 100% SAFE (cw=1).",
+                description = "Les 494+ extensions 18+ (cw=3) et Comick sont déjà bloquées par défaut. Ce verrou bloque en plus les sources mixtes (MangaDex, Bato, etc.) — fonctionne sans PC.",
                 isLocked = hardening.lockMihonMixedExtensions,
-                enabled = isDeviceOwner,
+                enabled = true,
                 onRequestLock = {
                     pendingOption = HardeningOption.LOCK_MIHON_MIXED to "Bloquer aussi les extensions Mihon Mixtes (cw=2)"
+                }
+            )
+        }
+
+        item {
+            OneWayHardeningCard(
+                title = "Désactiver la navigation privée Chrome (Device Owner)",
+                description = "Force IncognitoModeAvailability = 1 sur Chrome, Edge, Brave et Vivaldi (nécessite Device Owner).",
+                isLocked = hardening.lockChromeIncognito,
+                enabled = isDeviceOwner,
+                onRequestLock = {
+                    pendingOption = HardeningOption.LOCK_CHROME_INCOGNITO to "Désactiver la navigation privée Chrome"
                 }
             )
         }
@@ -1035,6 +1076,54 @@ private fun OneWayHardeningCard(
                         Text("Activer", fontSize = 12.sp)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupStepButton(
+    stepLabel: String,
+    done: Boolean,
+    actionLabel: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.25f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (done) Icons.Default.CheckCircle else Icons.Default.Warning,
+            contentDescription = null,
+            tint = if (done) EmeraldPrimary else AmberWarning,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = stepLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        if (done) {
+            Text(
+                text = "OK",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = EmeraldPrimary
+            )
+        } else {
+            Button(
+                onClick = onClick,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AmberWarning)
+            ) {
+                Text(actionLabel, color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }

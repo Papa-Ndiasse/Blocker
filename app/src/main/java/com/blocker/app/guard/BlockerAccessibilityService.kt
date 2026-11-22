@@ -41,13 +41,30 @@ class BlockerAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
 
+        val app = application as? BlockerApp
+        val flags = app?.preferences?.hardening?.value
+        val isSealed = flags?.sealPermanentProtection ?: false
+
+        // 0. Instant block if user launches Tor, a proxy browser, or a locked Reddit/X app
+        val launchMatch = ScreenContentClassifier.classifyLaunchedPackage(
+            packageName = pkg,
+            lockRedditEntirely = flags?.lockRedditEntirely ?: false,
+            lockXEntirely = flags?.lockXEntirely ?: false
+        )
+        if (launchMatch != null) {
+            triggerBlock(launchMatch, pkg)
+            return
+        }
+
         val shouldInspect = pkg in ScreenContentClassifier.BROWSER_PACKAGES ||
             pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
             pkg in ScreenContentClassifier.X_PACKAGES ||
             pkg in ScreenContentClassifier.MIHON_PACKAGES ||
             pkg in ScreenContentClassifier.SOCIAL_MONITORED_PACKAGES ||
-            pkg == "com.android.settings" ||
-            pkg.contains("settings")
+            pkg in ScreenContentClassifier.STORE_AND_INSTALLER_PACKAGES ||
+            pkg in ScreenContentClassifier.SETTINGS_PACKAGES ||
+            pkg.contains("settings") ||
+            pkg.contains("packageinstaller")
 
         if (!shouldInspect) return
 
@@ -73,7 +90,11 @@ class BlockerAccessibilityService : AccessibilityService() {
         collectNodeText(root, textSamples, maxNodes = 160)
         if (textSamples.isEmpty()) return
 
-        val match = ScreenContentClassifier.classifyAppText(pkg, textSamples)
+        val match = ScreenContentClassifier.classifyAppText(
+            packageName = pkg,
+            textSamples = textSamples,
+            isSealed = isSealed
+        )
         if (match != null) {
             triggerBlock(match, pkg)
         }
@@ -100,7 +121,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             app?.preferences?.recordBlocked(sourcePackage, match.reason)
         }
 
-        if (match.isSettingsTamper) {
+        if (match.isSettingsTamper || match.goHomeImmediately) {
             performGlobalAction(GLOBAL_ACTION_HOME)
         } else {
             performGlobalAction(GLOBAL_ACTION_BACK)

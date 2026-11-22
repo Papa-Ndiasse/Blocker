@@ -69,12 +69,7 @@ class GitHubAutoUpdater(
             }
 
             val controller = DeviceOwnerController(context)
-            if (!controller.isDeviceOwner()) {
-                return@withContext UpdateCheckResult.ReadyNeedsDeviceOwner(
-                    release.versionName,
-                    release.versionCode
-                )
-            }
+            val isOwner = controller.isDeviceOwner()
 
             val apkFile = File(deviceContext.cacheDir, PENDING_APK_NAME)
             downloadAssetToFile(
@@ -96,8 +91,12 @@ class GitHubAutoUpdater(
                 }
             }
 
-            installSilentlyAsDeviceOwner(apkFile, release.versionName)
-            UpdateCheckResult.InstallingSilently(release.versionName, release.versionCode)
+            installViaPackageInstaller(apkFile, release.versionName, isOwner)
+            if (isOwner) {
+                UpdateCheckResult.InstallingSilently(release.versionName, release.versionCode)
+            } else {
+                UpdateCheckResult.ReadyNeedsDeviceOwner(release.versionName, release.versionCode)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Auto-update check failed: ${e.message}")
             UpdateCheckResult.Error(e.message ?: e.javaClass.simpleName)
@@ -178,12 +177,12 @@ class GitHubAutoUpdater(
      * even Device Owner installs while DISALLOW_INSTALL_APPS is active); InstallResultReceiver
      * and BootCompletedReceiver(MY_PACKAGE_REPLACED) immediately re-seal all restrictions.
      */
-    private fun installSilentlyAsDeviceOwner(apkFile: File, versionName: String) {
+    private fun installViaPackageInstaller(apkFile: File, versionName: String, isDeviceOwner: Boolean) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val userManager = context.getSystemService(UserManager::class.java)
         val admin = BlockerDeviceAdminReceiver.componentName(context)
 
-        val hadInstallAppsLock = userManager.hasUserRestriction(UserManager.DISALLOW_INSTALL_APPS)
+        val hadInstallAppsLock = isDeviceOwner && userManager.hasUserRestriction(UserManager.DISALLOW_INSTALL_APPS)
         if (hadInstallAppsLock) {
             runCatching { dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS) }
         }

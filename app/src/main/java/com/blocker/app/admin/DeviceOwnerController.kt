@@ -18,6 +18,7 @@ import com.blocker.app.vpn.BlockerVpnService
 
 data class ProtectionStatus(
     val isDeviceOwner: Boolean,
+    val isDeviceAdminActive: Boolean,
     val isUninstallBlocked: Boolean,
     val isUserControlDisabled: Boolean,
     val isAlwaysOnVpnSet: Boolean,
@@ -42,7 +43,7 @@ data class ProtectionStatus(
  *     and silently uninstalls Tor Browser / Orbot / Tor clones via PackageInstaller.uninstall()
  *   - Managed Enterprise Policies for Chrome/Edge/Brave/Vivaldi (DnsOverHttpsMode=off, ForceGoogleSafeSearch=true)
  *   - Automatic suspension of proxy/VPN bypass browsers (Opera, Aloha, Puffin, UC)
- *   - Optional irreversible one-way hardening latches (ADB, All App Installs, Chrome Incognito, YouTube Restricted, Factory Reset)
+ *   - Optional irreversible one-way hardening latches (ADB, All App Installs, Chrome Incognito, Reddit/X/Mihon, Factory Reset)
  */
 class DeviceOwnerController(private val context: Context) {
 
@@ -56,6 +57,14 @@ class DeviceOwnerController(private val context: Context) {
     fun isDeviceOwner(): Boolean {
         return try {
             dpm.isDeviceOwnerApp(appContext.packageName)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun isDeviceAdminActive(): Boolean {
+        return try {
+            dpm.isAdminActive(admin)
         } catch (_: Exception) {
             false
         }
@@ -410,11 +419,13 @@ class DeviceOwnerController(private val context: Context) {
     fun getProtectionStatus(): ProtectionStatus {
         val a11yEnabled = BlockerAccessibilityService.isRunning.value ||
             BlockerAccessibilityService.isEnabledInSettings(appContext)
+        val adminActive = isDeviceAdminActive()
         val owner = isDeviceOwner()
         if (!owner) {
             return ProtectionStatus(
                 isDeviceOwner = false,
-                isUninstallBlocked = false,
+                isDeviceAdminActive = adminActive,
+                isUninstallBlocked = adminActive,
                 isUserControlDisabled = false,
                 isAlwaysOnVpnSet = false,
                 isVpnConfigLocked = false,
@@ -463,6 +474,7 @@ class DeviceOwnerController(private val context: Context) {
 
         return ProtectionStatus(
             isDeviceOwner = true,
+            isDeviceAdminActive = true,
             isUninstallBlocked = uninstallBlocked,
             isUserControlDisabled = userControlDisabled,
             isAlwaysOnVpnSet = alwaysOnVpn,

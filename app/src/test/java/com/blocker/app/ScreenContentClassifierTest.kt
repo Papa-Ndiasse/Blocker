@@ -81,18 +81,79 @@ class ScreenContentClassifierTest {
     }
 
     @Test
-    fun `detects Android Settings anti-tamper on Blocker Accessibility page`() {
-        val tamper = ScreenContentClassifier.classifyAppText(
+    fun `detects Android Settings anti-tamper on Blocker Accessibility, Admin, AppInfo, VPN, and Private DNS`() {
+        val a11yTamper = ScreenContentClassifier.classifyAppText(
             "com.android.settings",
-            listOf("Accessibilité", "Blocker", "Utiliser Blocker", "Raccourci Blocker")
+            listOf("Accessibilité", "Blocker", "Utiliser Blocker", "Raccourci Blocker"),
+            isSealed = true
         )
-        assertNotNull(tamper)
-        assertTrue(tamper!!.isSettingsTamper)
+        assertNotNull(a11yTamper)
+        assertTrue(a11yTamper!!.isSettingsTamper)
+
+        val adminTamper = ScreenContentClassifier.classifyAppText(
+            "com.android.settings",
+            listOf("Administrateur de l'appareil", "Blocker", "Désactiver cette appli"),
+            isSealed = true
+        )
+        assertNotNull(adminTamper)
+        assertTrue(adminTamper!!.isSettingsTamper)
+
+        val forceStopTamper = ScreenContentClassifier.classifyAppText(
+            "com.android.settings",
+            listOf("Infos sur l'appli", "Blocker", "Forcer l'arrêt", "Désinstaller"),
+            isSealed = true
+        )
+        assertNotNull(forceStopTamper)
+        assertTrue(forceStopTamper!!.isSettingsTamper)
+
+        val vpnTamper = ScreenContentClassifier.classifyAppText(
+            "com.android.settings",
+            listOf("VPN", "Blocker DNS Firewall", "Déconnecter", "VPN toujours activé"),
+            isSealed = true
+        )
+        assertNotNull(vpnTamper)
+        assertTrue(vpnTamper!!.isSettingsTamper)
+
+        val privateDnsTamper = ScreenContentClassifier.classifyAppText(
+            "com.android.settings",
+            listOf("DNS privé", "Nom d'hôte du fournisseur DNS privé", "dns.google"),
+            isSealed = true
+        )
+        assertNotNull(privateDnsTamper)
+        assertTrue(privateDnsTamper!!.isSettingsTamper)
+
+        // Before sealing, user can still open App Info / Device Admin / VPN to finish setup
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.android.settings",
+                listOf("VPN", "Blocker DNS Firewall", "VPN toujours activé"),
+                isSealed = false
+            )
+        )
 
         val normalSettings = ScreenContentClassifier.classifyAppText(
             "com.android.settings",
-            listOf("Wi-Fi", "Bluetooth", "Batterie")
+            listOf("Wi-Fi", "Bluetooth", "Batterie"),
+            isSealed = true
         )
         assertNull(normalSettings)
+    }
+
+    @Test
+    fun `blocks Tor installation in Play Store and launching Tor or locked Reddit and X without PC`() {
+        val playStoreTor = ScreenContentClassifier.classifyAppText(
+            "com.android.vending",
+            listOf("Tor Browser", "The Tor Project", "Installer")
+        )
+        assertNotNull(playStoreTor)
+        assertEquals(ScreenContentClassifier.REASON_TOR_OR_PROXY, playStoreTor!!.reason)
+
+        val torLaunch = ScreenContentClassifier.classifyLaunchedPackage("org.torproject.torbrowser")
+        assertNotNull(torLaunch)
+        assertTrue(torLaunch!!.goHomeImmediately)
+
+        assertNull(ScreenContentClassifier.classifyLaunchedPackage("com.reddit.android", lockRedditEntirely = false))
+        assertNotNull(ScreenContentClassifier.classifyLaunchedPackage("com.reddit.android", lockRedditEntirely = true))
+        assertNotNull(ScreenContentClassifier.classifyLaunchedPackage("com.twitter.android", lockXEntirely = true))
     }
 }

@@ -68,13 +68,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sealAndEnforceLockdown() {
         viewModelScope.launch(Dispatchers.IO) {
-            val enforced = controller.enforcePermanentLockdown()
-            _protectionStatus.value = controller.getProtectionStatus()
-            _statusBanner.value = if (enforced) {
-                "Protection permanente scellée et verrouillée."
-            } else {
-                "Activez d'abord le mode Device Owner via ADB."
+            val status = controller.getProtectionStatus()
+            if (status.isDeviceOwner) {
+                controller.enforcePermanentLockdown()
+                _protectionStatus.value = controller.getProtectionStatus()
+                _statusBanner.value = "Protection maximale Device Owner scellée et verrouillée."
+                return@launch
             }
+
+            // No-PC / No-Shell / No-Account-Deletion permanent seal:
+            // Requires VPN + Device Admin (anti-uninstall) + Accessibility Guard (locks all Settings tamper paths)
+            if (!vpnRunning.value || !status.isDeviceAdminActive || !status.isAccessibilityGuardEnabled) {
+                _statusBanner.value =
+                    "Activez d'abord les 3 étapes (VPN, Admin anti-désinstallation et Accessibilité)."
+                return@launch
+            }
+
+            app.preferences.latchPermanentSeal()
+            _protectionStatus.value = controller.getProtectionStatus()
+            _statusBanner.value =
+                "Protection permanente scellée sans PC ! Paramètres, désinstallation, VPN, DNS privé et Tor verrouillés."
         }
     }
 
@@ -109,10 +122,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Permanently activates an extra irreversible hardening rule (strictly one-way).
+     * Reddit, X, and Mihon-Mixed locks work 100% WITHOUT Device Owner (via DNS + Accessibility Guard).
      */
     fun activateIrreversibleHardening(option: HardeningOption) {
-        if (!controller.isDeviceOwner()) {
-            _statusBanner.value = "Le mode Device Owner doit être actif pour ce verrouillage."
+        val requiresDeviceOwner = option in setOf(
+            HardeningOption.LOCK_ADB,
+            HardeningOption.LOCK_UNKNOWN_SOURCES,
+            HardeningOption.LOCK_ALL_APP_INSTALLS,
+            HardeningOption.LOCK_CHROME_INCOGNITO,
+            HardeningOption.LOCK_FACTORY_RESET
+        )
+        if (requiresDeviceOwner && !controller.isDeviceOwner()) {
+            _statusBanner.value = "Ce verrou système avancé nécessite le mode Device Owner."
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -131,13 +152,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 HardeningOption.LOCK_MIHON_MIXED -> {
                     app.preferences.latchMihonMixedLock()
-                    controller.purgeNsfwMihonExtensions(blockMixed = true)
+                    if (controller.isDeviceOwner()) {
+                        controller.purgeNsfwMihonExtensions(blockMixed = true)
+                    }
                     val sync = app.blocklistRepository.syncRemoteBlocklists()
                     if (sync.success) app.reloadFilterEngine()
                 }
                 HardeningOption.LOCK_FACTORY_RESET -> app.preferences.latchFactoryResetLock()
             }
-            controller.applyIrreversibleHardening(app.preferences.hardening.value)
+            if (controller.isDeviceOwner()) {
+                controller.applyIrreversibleHardening(app.preferences.hardening.value)
+            }
             _protectionStatus.value = controller.getProtectionStatus()
             _statusBanner.value = "Verrouillage supplémentaire appliqué définitivement."
         }
@@ -158,7 +183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 is UpdateCheckResult.ReadyNeedsDeviceOwner -> {
                     _statusBanner.value =
-                        "v${res.versionName} disponible — activez Device Owner pour l'installation silencieuse."
+                        "v${res.versionName} téléchargée — confirmez la mise à jour Android."
                 }
                 is UpdateCheckResult.Error -> {
                     _statusBanner.value = "Erreur MAJ GitHub : ${res.message}"

@@ -89,7 +89,6 @@ import java.util.Locale
 @Composable
 fun BlockerRootScreen(
     viewModel: MainViewModel,
-    onRequestStartVpn: () -> Unit,
     onRequestDeviceAdmin: () -> Unit,
     onRequestBatteryUnrestricted: () -> Unit
 ) {
@@ -99,7 +98,6 @@ fun BlockerRootScreen(
     }
 
     val status by viewModel.protectionStatus.collectAsState()
-    val vpnRunning by viewModel.vpnRunning.collectAsState()
     val totalBlocked by viewModel.totalBlocked.collectAsState()
     val todayBlocked by viewModel.todayBlocked.collectAsState()
     val blocklistCount by viewModel.blocklistCount.collectAsState()
@@ -157,7 +155,6 @@ fun BlockerRootScreen(
                 0 -> DashboardTab(
                     status = status,
                     isSealed = hardening.sealPermanentProtection,
-                    vpnRunning = vpnRunning,
                     totalBlocked = totalBlocked,
                     todayBlocked = todayBlocked,
                     blocklistCount = blocklistCount,
@@ -167,7 +164,6 @@ fun BlockerRootScreen(
                     recentEvents = recentEvents,
                     isSyncing = isSyncing,
                     isCheckingUpdate = isCheckingUpdate,
-                    onRequestStartVpn = onRequestStartVpn,
                     onRequestDeviceAdmin = onRequestDeviceAdmin,
                     onRequestBatteryUnrestricted = onRequestBatteryUnrestricted,
                     onRefreshStatus = viewModel::refreshStatus,
@@ -227,7 +223,6 @@ private fun EmergencyRecoveryScreen() {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "Cette mise à jour GitHub (v${BuildConfig.VERSION_NAME}) a désactivé proprement tous les verrous Blocker :\n\n" +
-                            "• VPN DNS arrêté (connexion native restaurée)\n" +
                             "• Service d'Accessibilité désactivé\n" +
                             "• Administrateur d'appareil & Device Owner libérés\n" +
                             "• Restrictions système et navigateurs supprimées\n\n" +
@@ -245,7 +240,6 @@ private fun EmergencyRecoveryScreen() {
 private fun DashboardTab(
     status: ProtectionStatus,
     isSealed: Boolean,
-    vpnRunning: Boolean,
     totalBlocked: Long,
     todayBlocked: Long,
     blocklistCount: Int,
@@ -255,7 +249,6 @@ private fun DashboardTab(
     recentEvents: List<BlockedEvent>,
     isSyncing: Boolean,
     isCheckingUpdate: Boolean,
-    onRequestStartVpn: () -> Unit,
     onRequestDeviceAdmin: () -> Unit,
     onRequestBatteryUnrestricted: () -> Unit,
     onRefreshStatus: () -> Unit,
@@ -347,10 +340,10 @@ private fun DashboardTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Hero Shield Status Card (100% No-PC, No-Shell, No-Account-Deletion!)
-        item {
-            val standaloneReady = vpnRunning && status.isDeviceAdminActive && status.isAccessibilityGuardEnabled
-            val fullyLocked = (status.isDeviceOwner && vpnRunning) || (isSealed && standaloneReady)
+        // 1. Hero Shield Status Card (100% VPN-free, No-PC, No-Shell, No-Account-Deletion!)
+        item(key = "hero") {
+            val standaloneReady = status.isDeviceAdminActive && status.isAccessibilityGuardEnabled
+            val fullyLocked = status.isDeviceOwner || (isSealed && standaloneReady)
 
             Card(
                 colors = CardDefaults.cardColors(
@@ -382,10 +375,10 @@ private fun DashboardTab(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = when {
-                                    fullyLocked && status.isDeviceOwner -> "Protection Maximale Active (Device Owner)"
-                                    fullyLocked -> "Protection Permanente Active (Sans PC)"
+                                    fullyLocked && status.isDeviceOwner -> "Protection Maximale Active (Sans VPN)"
+                                    fullyLocked -> "Protection Permanente Active (Sans VPN / Sans PC)"
                                     standaloneReady -> "Prêt à sceller définitivement"
-                                    else -> "Activation en 3 clics (sans PC ni compte à supprimer)"
+                                    else -> "Activation en 2 clics (sans VPN, sans PC)"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
@@ -394,9 +387,9 @@ private fun DashboardTab(
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = if (fullyLocked) {
-                                    "Aucune désactivation possible : désinstallation, Paramètres, VPN, DNS Privé, Tor, Mihon 18+, Comick, Reddit & X verrouillés."
+                                    "Mode 100 % sans VPN (zéro crash One UI) : >1,2M sites, Reddit/X, Mihon 18+, Comick, Tor, Paramètres & désinstallation verrouillés."
                                 } else {
-                                    "Activez les 3 boucliers ci-dessous directement sur le téléphone, puis scellez."
+                                    "Mode sans VPN (zéro crash Galaxy A55) : activez les 2 boucliers ci-dessous, puis scellez."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.88f)
@@ -407,27 +400,18 @@ private fun DashboardTab(
                     if (!fullyLocked) {
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Step 1: Local DNS VPN
+                        // Step 1: Standard Device Admin (Anti-Uninstall — 1 tap, no PC, no account removal!)
                         SetupStepButton(
-                            stepLabel = "1. Bouclier DNS (>1,2M sites, SafeSearch, Keiyoushi 18+, Comick)",
-                            done = vpnRunning,
-                            actionLabel = "Activer VPN",
-                            onClick = onRequestStartVpn
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Step 2: Standard Device Admin (Anti-Uninstall — 1 tap, no PC, no account removal!)
-                        SetupStepButton(
-                            stepLabel = "2. Anti-désinstallation (Admin appareil — sans supprimer de compte)",
+                            stepLabel = "1. Anti-désinstallation (Admin appareil — sans supprimer de compte)",
                             done = status.isDeviceAdminActive,
                             actionLabel = "Activer",
                             onClick = onRequestDeviceAdmin
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Step 3: Accessibility Guard (Blocks Reddit/X/Mihon/Tor + locks Android Settings!)
+                        // Step 2: Accessibility Guard (Blocks 1.2M+ domains in browsers, Reddit/X/Mihon/Tor + locks Settings!)
                         SetupStepButton(
-                            stepLabel = "3. Bouclier Écran & Anti-contournement Paramètres",
+                            stepLabel = "2. Bouclier Écran (>1,2M sites, Reddit, X, Mihon 18+, Comick, Tor & Paramètres)",
                             done = status.isAccessibilityGuardEnabled,
                             actionLabel = "Accessibilité",
                             onClick = {
@@ -456,13 +440,79 @@ private fun DashboardTab(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                    } else if (!vpnRunning) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = onRequestStartVpn,
-                            modifier = Modifier.fillMaxWidth()
+                    }
+                }
+            }
+        }
+
+        // 1b. Native Samsung Private DNS (replaces local VPN with 0 crash, 0 battery drain, NO YouTube Restricted Mode!)
+        if (!isSealed) {
+            item(key = "native_private_dns") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "DNS Privé Natif Samsung (recommandé, sans VPN)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Pour filtrer aussi tout le réseau (Wi-Fi + 5G) sans aucun VPN ni crash : dans Paramètres → Connexions → Plus de paramètres → DNS privé → Nom d'hôte, collez :",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "adult-filter-dns.cleanbrowsing.org",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldPrimary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "(Bloque les sites adultes + force SafeSearch, SANS mode restreint YouTube. Une fois Blocker scellé, DNS Privé est verrouillé.)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Relancer le bouclier DNS")
+                            OutlinedButton(
+                                onClick = {
+                                    val cm = context.getSystemService(ClipboardManager::class.java)
+                                    cm.setPrimaryClip(
+                                        ClipData.newPlainText(
+                                            "Private DNS",
+                                            "adult-filter-dns.cleanbrowsing.org"
+                                        )
+                                    )
+                                    Toast.makeText(context, "Adresse DNS copiée", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Copier", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                                    }.onFailure {
+                                        runCatching { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Paramètres DNS", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -704,15 +754,13 @@ private fun DashboardTab(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     val tamperLocked = status.isDeviceOwner || (isSealed && status.isAccessibilityGuardEnabled)
-                    ProtectionCheckRow("VPN DNS local Always-On (>1,2M domaines)", vpnRunning)
-                    ProtectionCheckRow("Bouclier Écran temps réel (Reddit / X / Mihon / Apps)", status.isAccessibilityGuardEnabled)
+                    ProtectionCheckRow("Mode 100 % Sans VPN (stabilité maximale Galaxy A55)", true)
+                    ProtectionCheckRow("Bouclier Écran & >1,2M domaines (Navigateurs, Reddit, X, Apps)", status.isAccessibilityGuardEnabled)
                     ProtectionCheckRow("Anti-désinstallation Blocker (Admin appareil)", status.isUninstallBlocked || status.isDeviceAdminActive)
                     ProtectionCheckRow("Anti-Forcer l'arrêt, Accessibilité & Paramètres", status.isUserControlDisabled || tamperLocked)
-                    ProtectionCheckRow("Verrouillage VPN & DNS Privé + Anti-DoH", (status.isVpnConfigLocked && status.isPrivateDnsLocked) || tamperLocked)
-                    ProtectionCheckRow("Anti-Tor & Proxys (Play Store, lancement & DNS)", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
-                    ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", vpnRunning && (status.isAccessibilityGuardEnabled || status.isDeviceOwner))
-                    ProtectionCheckRow("SafeSearch forcé (Google, Bing, DDG, Brave)", vpnRunning)
-                    ProtectionCheckRow("DNS Amont Adulte (1.1.1.3 / CleanBrowsing Adult / OpenDNS)", vpnRunning)
+                    ProtectionCheckRow("Verrouillage DNS Privé Samsung", status.isPrivateDnsLocked || tamperLocked)
+                    ProtectionCheckRow("Anti-Tor & Proxys (Play Store & lancement)", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
+                    ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
                     ProtectionCheckRow("Batterie illimitée (Anti-Veille Profonde Samsung)", status.isBatteryOptimizationIgnored)
                     ProtectionCheckRow("Immunité totale : poseidon-scan.net", true)
                     ProtectionCheckRow("Anti-Mode Sans Échec & Multi-Utilisateurs", status.isSafeBootLocked && status.isMultiUserLocked)

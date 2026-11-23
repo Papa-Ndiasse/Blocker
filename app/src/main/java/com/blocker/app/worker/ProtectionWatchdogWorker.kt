@@ -8,12 +8,11 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.blocker.app.admin.DeviceOwnerController
 import com.blocker.app.admin.EmergencyKillSwitch
-import com.blocker.app.vpn.BlockerVpnService
 import java.util.concurrent.TimeUnit
 
 /**
  * Periodic self-healing watchdog (every 15 minutes) that verifies Device Owner policies
- * remain intact and restarts the local DNS VPN service if it was ever killed by OEM battery savers.
+ * remain intact (VPN-free mode — never starts any VpnService).
  */
 class ProtectionWatchdogWorker(
     appContext: Context,
@@ -27,11 +26,6 @@ class ProtectionWatchdogWorker(
         val controller = DeviceOwnerController(applicationContext)
         if (controller.isDeviceOwner()) {
             controller.enforcePermanentLockdown()
-        } else if (!BlockerVpnService.isRunning.value) {
-            // Only restart if VPN permission was already granted
-            if (android.net.VpnService.prepare(applicationContext) == null) {
-                BlockerVpnService.start(applicationContext)
-            }
         }
         return Result.success()
     }

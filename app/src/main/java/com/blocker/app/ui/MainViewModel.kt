@@ -81,18 +81,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // No-PC / No-Shell / No-Account-Deletion permanent seal:
-            // Requires VPN + Device Admin (anti-uninstall) + Accessibility Guard (locks all Settings tamper paths)
-            if (!vpnRunning.value || !status.isDeviceAdminActive || !status.isAccessibilityGuardEnabled) {
+            // No-PC / No-Shell / No-Account-Deletion permanent seal (VPN-free):
+            // Requires Device Admin (anti-uninstall) + Accessibility Guard (blocks 1.2M+ domains, Reddit/X/Mihon/Tor & locks Settings)
+            if (!status.isDeviceAdminActive || !status.isAccessibilityGuardEnabled) {
                 _statusBanner.value =
-                    "Activez d'abord les 3 étapes (VPN, Admin anti-désinstallation et Accessibilité)."
+                    "Activez d'abord les 2 étapes (Admin anti-désinstallation et Bouclier Écran Accessibilité)."
                 return@launch
             }
 
             app.preferences.latchPermanentSeal()
             _protectionStatus.value = controller.getProtectionStatus()
             _statusBanner.value =
-                "Protection permanente scellée sans PC ! Paramètres, désinstallation, VPN, DNS privé et Tor verrouillés."
+                "Protection permanente scellée sans PC ni VPN ! Paramètres, désinstallation, DNS privé et Tor verrouillés."
         }
     }
 

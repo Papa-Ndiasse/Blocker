@@ -1,11 +1,9 @@
 package com.blocker.app
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.net.Uri
-import android.net.VpnService
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -17,20 +15,10 @@ import com.blocker.app.admin.EmergencyKillSwitch
 import com.blocker.app.ui.BlockerRootScreen
 import com.blocker.app.ui.MainViewModel
 import com.blocker.app.ui.theme.BlockerTheme
-import com.blocker.app.vpn.BlockerVpnService
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
-
-    private val vpnConsentLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            BlockerVpnService.start(this)
-        }
-        viewModel.refreshStatus()
-    }
 
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -47,7 +35,6 @@ class MainActivity : ComponentActivity() {
             BlockerTheme {
                 BlockerRootScreen(
                     viewModel = viewModel,
-                    onRequestStartVpn = { startVpnWithConsentIfNeeded() },
                     onRequestDeviceAdmin = { requestStandardDeviceAdmin() },
                     onRequestBatteryUnrestricted = { requestIgnoreBatteryOptimizations() }
                 )
@@ -58,17 +45,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshStatus()
-    }
-
-    private fun startVpnWithConsentIfNeeded() {
-        if (EmergencyKillSwitch.isActive()) return
-        val prepareIntent = VpnService.prepare(this)
-        if (prepareIntent != null) {
-            vpnConsentLauncher.launch(prepareIntent)
-        } else {
-            BlockerVpnService.start(this)
-            viewModel.refreshStatus()
-        }
     }
 
     private fun requestStandardDeviceAdmin() {
@@ -88,7 +64,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Prevents Samsung Galaxy A55 One UI Device Care from putting Blocker into Deep Sleep
-     * and killing the local DNS VPN or Accessibility Guard in the background.
+     * and killing the Accessibility Guard in the background.
      */
     @SuppressLint("BatteryLife")
     private fun requestIgnoreBatteryOptimizations() {

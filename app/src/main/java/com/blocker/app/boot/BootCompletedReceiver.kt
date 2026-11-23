@@ -6,13 +6,11 @@ import android.content.Intent
 import android.util.Log
 import com.blocker.app.admin.DeviceOwnerController
 import com.blocker.app.admin.EmergencyKillSwitch
-import com.blocker.app.vpn.BlockerVpnService
 
 /**
- * Starts the local DNS VPN and re-enforces Device Owner policies immediately on boot,
- * including during Direct Boot (LOCKED_BOOT_COMPLETED) before the user unlocks the device.
- * Also executes EmergencyKillSwitch immediately on MY_PACKAGE_REPLACED if an emergency
- * GitHub recovery release was installed.
+ * Re-enforces Device Owner policies immediately on boot and package replacement,
+ * and executes EmergencyKillSwitch immediately if an emergency GitHub recovery release is installed.
+ * (No VPN service is ever started.)
  */
 class BootCompletedReceiver : BroadcastReceiver() {
 
@@ -23,13 +21,11 @@ class BootCompletedReceiver : BroadcastReceiver() {
             return
         }
 
-        Log.i(TAG, "Received $action — ensuring Blocker protection is active")
+        Log.i(TAG, "Received $action — ensuring Blocker protection is active (VPN-free mode)")
 
         val controller = DeviceOwnerController(context)
         if (controller.isDeviceOwner()) {
             controller.enforcePermanentLockdown()
-        } else if (android.net.VpnService.prepare(context) == null) {
-            BlockerVpnService.start(context)
         }
     }
 

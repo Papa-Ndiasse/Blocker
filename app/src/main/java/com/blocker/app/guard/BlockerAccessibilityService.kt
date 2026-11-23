@@ -3,7 +3,6 @@ package com.blocker.app.guard
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
-import android.net.VpnService
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -11,8 +10,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.blocker.app.BlockerApp
 import com.blocker.app.BuildConfig
+import com.blocker.app.filter.FilterDecision
 import com.blocker.app.ui.BlockedActivity
-import com.blocker.app.vpn.BlockerVpnService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,11 +20,11 @@ import java.lang.ref.WeakReference
 /**
  * Real-Time On-Screen & In-App Content Guard (AccessibilityService),
  * heavily optimized for Samsung Galaxy A55 5G (Exynos 1480, 120Hz AMOLED, One UI 6.1/7.0):
+ *   - 100% VPN-free: checks browser URL bars directly against the 1.2M+ domain filter engine
  *   - Instant 0ms early exit for unmonitored apps (games, Camera, Spotify, Gallery, Launcher -> 0 Binder IPC)
  *   - 220ms content-event debounce on TYPE_WINDOW_CONTENT_CHANGED (zero 120Hz scrolling stutter!)
  *   - 0ms instant reaction on TYPE_WINDOW_STATE_CHANGED & TYPE_VIEW_TEXT_CHANGED
  *   - Bounded 90-node traversal + Samsung Internet & Samsung Internet Beta URL bar inspection
- *   - Auto-restarts local DNS VPN on connect if Samsung Device Care ever killed it
  *   - Supports remote EmergencyKillSwitch (`BuildConfig.EMERGENCY_DISABLE == true`) via `disableSelf()`
  */
 class BlockerAccessibilityService : AccessibilityService() {
@@ -46,12 +45,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
 
         _isRunning.value = true
-        Log.i(TAG, "BlockerAccessibilityService connected (A55 120Hz optimized)")
-
-        // Self-heal VPN if Samsung One UI killed it while screen was off
-        if (!BlockerVpnService.isRunning.value && VpnService.prepare(this) == null) {
-            BlockerVpnService.start(this)
-        }
+        Log.i(TAG, "BlockerAccessibilityService connected (VPN-free A55 120Hz optimized)")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -109,6 +103,18 @@ class BlockerAccessibilityService : AccessibilityService() {
             if (!urlText.isNullOrBlank()) {
                 if (ScreenContentClassifier.isImmuneUrl(urlText)) {
                     return
+                }
+                // Check host directly against the 1.2M+ domain blocklist, Keiyoushi 18+, Comick & custom domains
+                val host = extractHostFromUrlBar(urlText)
+                if (host != null && app != null) {
+                    val decision = app.filterEngine.evaluate(host)
+                    if (decision is FilterDecision.Block) {
+                        triggerBlock(
+                            ScreenBlockMatch(ScreenContentClassifier.REASON_BROWSER_URL, host),
+                            pkg
+                        )
+                        return
+                    }
                 }
                 val urlMatch = ScreenContentClassifier.classifyUrl(urlText)
                 if (urlMatch != null) {
@@ -188,6 +194,14 @@ class BlockerAccessibilityService : AccessibilityService() {
             if (!text.isNullOrBlank()) return text
         }
         return null
+    }
+
+    private fun extractHostFromUrlBar(rawUrl: String): String? {
+        val cleaned = rawUrl.trim().lowercase()
+        if (cleaned.isEmpty() || cleaned.contains(' ')) return null
+        val noScheme = cleaned.removePrefix("https://").removePrefix("http://")
+        val host = noScheme.substringBefore('/').substringBefore('?').substringBefore('#').substringBefore(':')
+        return if (host.contains('.') && host.length in 3..253) host else null
     }
 
     private fun collectNodeText(

@@ -112,9 +112,10 @@ class DeviceOwnerController(private val context: Context) {
             }
         }
 
-        // 4. Reset any manual unfiltered Private DNS (e.g. dns.google) and lock Private DNS settings
-        runSafely("setGlobalPrivateDnsModeOpportunistic") {
-            dpm.setGlobalPrivateDnsModeOpportunistic(admin)
+        // 4. Enforce native Android Private DNS (Adult filter, NO YouTube Restricted Mode, ZERO VPN)
+        //    and lock Private DNS settings so it cannot be changed.
+        runSafely("setGlobalPrivateDnsModeSpecifiedHost") {
+            dpm.setGlobalPrivateDnsModeSpecifiedHost(admin, "adult-filter-dns.cleanbrowsing.org")
         }
         addRestriction(UserManager.DISALLOW_CONFIG_PRIVATE_DNS)
 
@@ -133,10 +134,9 @@ class DeviceOwnerController(private val context: Context) {
         addRestriction(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES_GLOBALLY)
         addRestriction(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
 
-        // 7. Configure Blocker as Always-On VPN (lockdownEnabled=false so non-DNS HTTPS flows natively;
-        //    DISALLOW_CONFIG_VPN prevents disabling or replacing the VPN).
-        runSafely("setAlwaysOnVpnPackage") {
-            dpm.setAlwaysOnVpnPackage(admin, appContext.packageName, false)
+        // 7. Explicitly clear any previous Always-On VPN package (VPN permanently removed for stability)
+        runSafely("clearAlwaysOnVpnPackage") {
+            dpm.setAlwaysOnVpnPackage(admin, null, false)
         }
 
         // 8. Apply Managed Browser Restrictions (disable browser built-in DoH, force SafeSearch)
@@ -149,9 +149,6 @@ class DeviceOwnerController(private val context: Context) {
 
         // 10. Apply any activated one-way irreversible hardening latches
         applyIrreversibleHardening(flags)
-
-        // 11. Start the local DNS VPN immediately
-        BlockerVpnService.start(appContext)
         return true
     }
 

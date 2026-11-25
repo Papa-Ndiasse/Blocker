@@ -99,7 +99,13 @@ object KeywordFilter {
         "apple.com",
         "amazon.com",
         "amazon.fr",
-        "poseidon-scan.net"
+        "poseidon-scan.net",
+        "discord.com",
+        "discord.gg",
+        "discordapp.com",
+        "discordapp.net",
+        "discord.media",
+        "discordcdn.com"
     )
 
     // Single precompiled automaton replaces 190 sequential String.contains() calls per label

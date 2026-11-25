@@ -109,7 +109,6 @@ object ScreenContentClassifier {
         "org.telegram.messenger",
         "org.telegram.messenger.web",
         "org.thunderdog.challegram",
-        "com.discord",
         "com.instagram.android",
         "com.zhiliaoapp.musically",
         "com.ss.android.ugc.trill",
@@ -118,6 +117,13 @@ object ScreenContentClassifier {
         "com.snapchat.android",
         "com.google.android.youtube",
         "com.google.android.googlequicksearchbox"
+    )
+
+    val IMMUNE_PACKAGES = setOf(
+        "com.discord",
+        "com.discord.beta",
+        "com.discord.canary",
+        "com.discord.alpha"
     )
 
     val STORE_AND_INSTALLER_PACKAGES = setOf(
@@ -284,7 +290,11 @@ object ScreenContentClassifier {
         val decoded = rawUrl.trim().lowercase()
         val withoutScheme = decoded.removePrefix("https://").removePrefix("http://")
         val host = withoutScheme.substringBefore('/').substringBefore('?').substringBefore('#').substringBefore(':')
-        return host == "poseidon-scan.net" || host.endsWith(".poseidon-scan.net")
+        return host == "poseidon-scan.net" || host.endsWith(".poseidon-scan.net") ||
+            host == "discord.com" || host.endsWith(".discord.com") ||
+            host == "discord.gg" || host.endsWith(".discord.gg") ||
+            host == "discordapp.com" || host.endsWith(".discordapp.com") ||
+            host == "discordapp.net" || host.endsWith(".discordapp.net")
     }
 
     /**
@@ -297,7 +307,7 @@ object ScreenContentClassifier {
         lockXEntirely: Boolean = false,
         lockSamsungSecureFolder: Boolean = false
     ): ScreenBlockMatch? {
-        if (packageName == "com.blocker.app") return null
+        if (packageName == "com.blocker.app" || packageName in IMMUNE_PACKAGES) return null
 
         if (TorAppPolicy.isTorPackage(packageName) ||
             packageName in DeviceOwnerController.BYPASS_PROXY_PACKAGES
@@ -398,7 +408,7 @@ object ScreenContentClassifier {
         blockedKeiyoushiNames: Set<String> = emptySet()
     ): ScreenBlockMatch? {
         if (textSamples.isEmpty()) return null
-        if (packageName == "com.blocker.app") return null
+        if (packageName == "com.blocker.app" || packageName in IMMUNE_PACKAGES) return null
 
         val joined = textSamples.joinToString("\n").lowercase()
 

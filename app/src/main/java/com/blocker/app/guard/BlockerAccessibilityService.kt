@@ -419,7 +419,11 @@ class BlockerAccessibilityService : AccessibilityService() {
             "com.sec.android.app.launcher",
             "com.samsung.android.honeyboard",
             "com.google.android.inputmethod.latin",
-            "com.samsung.android.app.aodservice"
+            "com.samsung.android.app.aodservice",
+            "com.discord",
+            "com.discord.beta",
+            "com.discord.canary",
+            "com.discord.alpha"
         )
 
         private val _isRunning = MutableStateFlow(false)

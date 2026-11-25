@@ -100,7 +100,13 @@ class DnsFilterEngine(
          * blocklists, keywords, Keiyoushi sync, and screen guards.
          */
         val IMMUNE_DOMAINS = setOf(
-            "poseidon-scan.net"
+            "poseidon-scan.net",
+            "discord.com",
+            "discord.gg",
+            "discordapp.com",
+            "discordapp.net",
+            "discord.media",
+            "discordcdn.com"
         )
 
         private val ESSENTIAL_INFRA_DOMAINS = setOf(

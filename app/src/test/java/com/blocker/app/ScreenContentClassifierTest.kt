@@ -258,5 +258,16 @@ class ScreenContentClassifierTest {
             blockedKeiyoushiNames = keiyoushiNames
         )
         assertNull(installerPoseidon)
+
+        // Discord app & Discord URLs are 100% immune
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.discord",
+                listOf("#nsfw-memes", "18+", "adult content"),
+                isSealed = true
+            )
+        )
+        assertNull(ScreenContentClassifier.classifyUrl("https://discord.com/channels/12345/nsfw"))
+        assertNull(ScreenContentClassifier.classifyUrl("https://discord.gg/nsfw123"))
     }
 }

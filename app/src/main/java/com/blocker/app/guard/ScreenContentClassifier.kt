@@ -56,12 +56,41 @@ object ScreenContentClassifier {
         "com.brave.browser",
         "org.mozilla.firefox",
         "org.mozilla.firefox_beta",
+        "org.mozilla.fenix",
         "org.mozilla.focus",
         "com.sec.android.app.sbrowser",
         "com.sec.android.app.sbrowser.beta",
         "com.vivaldi.browser",
-        "com.duckduckgo.mobile.android"
+        "com.duckduckgo.mobile.android",
+        "com.opera.browser",
+        "com.opera.mini.native",
+        "com.opera.gx",
+        "com.kiwibrowser.browser",
+        "org.cromite.cromite",
+        "com.yandex.browser",
+        "mark.via.gp"
     )
+
+    fun isMihonPackage(packageName: String): Boolean {
+        if (packageName == "com.blocker.app") return false
+        val low = packageName.lowercase()
+        return low in MIHON_PACKAGES ||
+            low.contains("mihon") ||
+            low.contains("tachiyomi") ||
+            low.contains("komikku") ||
+            low.contains("aniyomi") ||
+            low.contains("yokai")
+    }
+
+    fun isBrowserPackage(packageName: String): Boolean {
+        if (packageName == "com.blocker.app") return false
+        val low = packageName.lowercase()
+        return low in BROWSER_PACKAGES ||
+            low.contains("sbrowser") ||
+            low.contains("chrome") ||
+            low.contains("firefox") ||
+            low.contains("browser")
+    }
 
     val REDDIT_PACKAGES = setOf(
         "com.reddit.android",
@@ -365,14 +394,16 @@ object ScreenContentClassifier {
     fun classifyAppText(
         packageName: String,
         textSamples: List<String>,
-        isSealed: Boolean = true
+        isSealed: Boolean = true,
+        blockedKeiyoushiNames: Set<String> = emptySet()
     ): ScreenBlockMatch? {
         if (textSamples.isEmpty()) return null
         if (packageName == "com.blocker.app") return null
 
         val joined = textSamples.joinToString("\n").lowercase()
 
-        // 1. Play Store & Package Installer Guard: block installing Tor, proxy browsers, or uninstalling Blocker
+        // 1. Play Store & Package Installer Guard: block installing Tor, proxy browsers,
+        //    Keiyoushi 18+ / Comick extensions, or uninstalling Blocker
         if (packageName in STORE_AND_INSTALLER_PACKAGES || packageName.contains("packageinstaller")) {
             // Prevent uninstalling Blocker via PackageInstaller (while still allowing self-updates!)
             if (isSealed && joined.contains("blocker") &&
@@ -387,6 +418,11 @@ object ScreenContentClassifier {
                 )
             }
 
+            // Total immunity for Poseidon Scan extension installation
+            if (isImmuneText(joined)) {
+                return null
+            }
+
             // Block installing Tor / Orbot / Proxy browsers from Play Store or APK installer (works without PC!)
             for (term in TOR_AND_PROXY_STORE_TERMS) {
                 if (joined.contains(term)) {
@@ -397,12 +433,36 @@ object ScreenContentClassifier {
                     )
                 }
             }
+
+            // Block installing ANY Keiyoushi 18+ / Comick extension APK via PackageInstaller!
+            val matchedExtInstall = matchKeiyoushiExtensionName(
+                textSamples = textSamples,
+                blockedNames = blockedKeiyoushiNames,
+                isInstaller = true
+            )
+            if (matchedExtInstall != null) {
+                return ScreenBlockMatch(
+                    reason = REASON_MIHON_NSFW,
+                    detail = "installer-keiyoushi:$matchedExtInstall",
+                    goHomeImmediately = true
+                )
+            }
+            if ((joined.contains("tachiyomi") || joined.contains("mihon") || joined.contains("keiyoushi")) &&
+                (MIHON_NSFW_INDICATORS.any { containsBoundaryOrPhrase(joined, it) } ||
+                    EXPLICIT_SEARCH_AND_URL_REGEX.containsMatchIn(joined))
+            ) {
+                return ScreenBlockMatch(
+                    reason = REASON_MIHON_NSFW,
+                    detail = "installer-mihon-18+",
+                    goHomeImmediately = true
+                )
+            }
             return null
         }
 
         // 2. Android Settings Anti-Tamper Fortress (active once user taps "Sceller" — zero PC required!)
         if (packageName in SETTINGS_PACKAGES || packageName.contains("settings")) {
-            // Always protect Blocker's own Accessibility toggle once enabled; protect all 5 tamper paths once sealed
+            // Always protect Blocker's own Accessibility toggle once enabled; protect all tamper paths once sealed
             if (joined.contains("blocker") && BLOCKER_TAMPER_KEYWORDS.any { joined.contains(it) }) {
                 val isAccessibilityPage = joined.contains("accessibilit") ||
                     joined.contains("utiliser blocker") || joined.contains("use blocker")
@@ -437,8 +497,10 @@ object ScreenContentClassifier {
             return null
         }
 
+        val isBrowser = isBrowserPackage(packageName)
+
         // 3. Reddit native app (or Reddit web inside browser)
-        if (packageName in REDDIT_PACKAGES || (packageName in BROWSER_PACKAGES && joined.contains("reddit"))) {
+        if (packageName in REDDIT_PACKAGES || (isBrowser && joined.contains("reddit"))) {
             for (indicator in REDDIT_NSFW_INDICATORS) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
                     return ScreenBlockMatch(REASON_REDDIT_NSFW, indicator)
@@ -451,7 +513,7 @@ object ScreenContentClassifier {
         }
 
         // 4. X (Twitter) native app (or X web inside browser)
-        if (packageName in X_PACKAGES || (packageName in BROWSER_PACKAGES && (joined.contains("x.com") || joined.contains("twitter")))) {
+        if (packageName in X_PACKAGES || (isBrowser && (joined.contains("x.com") || joined.contains("twitter")))) {
             for (indicator in X_SENSITIVE_INDICATORS) {
                 if (joined.contains(indicator)) {
                     return ScreenBlockMatch(REASON_X_NSFW, indicator)
@@ -463,8 +525,17 @@ object ScreenContentClassifier {
             }
         }
 
-        // 5. Mihon / Tachiyomi / Komikku / Aniyomi (blocks 18+ extensions, 18+ settings toggle, Comick, and X genres/titles)
-        if (packageName in MIHON_PACKAGES) {
+        // 5. Mihon / Tachiyomi / Komikku / Aniyomi (blocks all 489+ Keiyoushi 18+ extensions,
+        //    installed 18+ extension labels, 18+ settings toggle, Comick, and X genres/titles)
+        if (isMihonPackage(packageName)) {
+            val matchedExt = matchKeiyoushiExtensionName(
+                textSamples = textSamples,
+                blockedNames = blockedKeiyoushiNames,
+                isInstaller = false
+            )
+            if (matchedExt != null) {
+                return ScreenBlockMatch(REASON_MIHON_NSFW, "keiyoushi:$matchedExt")
+            }
             for (indicator in MIHON_NSFW_INDICATORS) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
                     return ScreenBlockMatch(REASON_MIHON_NSFW, indicator)
@@ -476,8 +547,21 @@ object ScreenContentClassifier {
             }
         }
 
-        // 6. Other monitored social/messaging/search apps
+        // 6. General Browser Page Guard (catches adult/hentai/JAV/Comick sites even when the browser
+        //    hides the URL bar while scrolling or uses a custom toolbar ID)
+        if (isBrowser) {
+            if (isImmuneText(joined)) {
+                return null
+            }
+            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            if (explicitMatch != null) {
+                return ScreenBlockMatch(REASON_BROWSER_URL, explicitMatch.value)
+            }
+        }
+
+        // 7. Other monitored social/messaging/search apps
         if (packageName in SOCIAL_MONITORED_PACKAGES) {
+            if (isImmuneText(joined)) return null
             for (indicator in listOf("18+", "nsfw", "contenu pour adultes", "mature content", "adult content", "potentially sensitive")) {
                 if (containsBoundaryOrPhrase(joined, indicator)) {
                     return ScreenBlockMatch(REASON_APP_NSFW, indicator)
@@ -491,6 +575,96 @@ object ScreenContentClassifier {
 
         return null
     }
+
+    fun isImmuneText(lowerText: String): Boolean {
+        return lowerText.contains("poseidon-scan.net") ||
+            lowerText.contains("poseidon scan") ||
+            lowerText.contains("poseidonscan")
+    }
+
+    /**
+     * Extracts candidate domain names from browser URL bars, toolbars, or WebView text nodes
+     * (even when the toolbar contains extra text like "pornhub.com — Connexion sécurisée").
+     */
+    fun extractDomainsFromText(text: String): List<String> {
+        val lower = text.lowercase()
+        val matches = DOMAIN_TOKEN_REGEX.findAll(lower)
+        val out = ArrayList<String>(4)
+        for (m in matches) {
+            val host = m.groupValues[1].trimEnd('.')
+            val tld = host.substringAfterLast('.')
+            if (tld in IGNORED_FILE_EXTENSIONS) continue
+            if (host.length in 4..253) {
+                out.add(host)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Matches visible UI text nodes in Mihon or PackageInstaller against the 489+ Keiyoushi 18+
+     * extension names (plus Comick and dynamically detected installed 18+ extension APKs).
+     */
+    fun matchKeiyoushiExtensionName(
+        textSamples: List<String>,
+        blockedNames: Set<String>,
+        isInstaller: Boolean
+    ): String? {
+        if (blockedNames.isEmpty()) return null
+        val joined = textSamples.joinToString("\n").lowercase()
+        val hasInstallerContext = !isInstaller ||
+            joined.contains("tachiyomi") ||
+            joined.contains("mihon") ||
+            joined.contains("extension") ||
+            joined.contains("installer") ||
+            joined.contains("install")
+
+        if (!hasInstallerContext) return null
+
+        for (raw in textSamples) {
+            val clean = raw.trim().lowercase()
+            if (clean.length < 3 || isImmuneText(clean)) continue
+
+            // Strip "Tachiyomi: " or "Mihon: " prefix used by extension APK labels
+            val stripped = clean
+                .removePrefix("tachiyomi:")
+                .removePrefix("mihon:")
+                .removePrefix("keiyoushi:")
+                .trim()
+
+            if (stripped in blockedNames) return stripped
+
+            // Also match toolbar/list formats like "HentaiFox (EN)" or "ToonGod · 18+" or "Comick - All"
+            val baseName = stripped
+                .substringBefore(" (")
+                .substringBefore(" ·")
+                .substringBefore(" -")
+                .substringBefore(" —")
+                .trim()
+            if (baseName.length >= 3 && baseName in blockedNames) {
+                return baseName
+            }
+
+            // In PackageInstaller dialogs: "Voulez-vous installer Tachiyomi: HentaiFox ?"
+            if (isInstaller && (clean.contains("tachiyomi:") || clean.contains("mihon:"))) {
+                val afterColon = clean.substringAfter(':').trim()
+                    .trimEnd('?', '!', '.', ' ')
+                    .substringBefore(" ?")
+                    .trim()
+                if (afterColon in blockedNames) return afterColon
+            }
+        }
+        return null
+    }
+
+    private val DOMAIN_TOKEN_REGEX = Regex(
+        "(?<![a-z0-9-])([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)(?![a-z0-9-])"
+    )
+
+    private val IGNORED_FILE_EXTENSIONS = setOf(
+        "apk", "png", "jpg", "jpeg", "gif", "webp", "svg", "mp4", "mp3", "mkv",
+        "pdf", "zip", "rar", "7z", "txt", "json", "xml", "html", "htm", "css", "js", "php"
+    )
 
     private fun containsBoundaryOrPhrase(text: String, needle: String): Boolean {
         if (needle.contains(' ') || needle.contains('/') || needle.contains('#') || needle.contains('+')) {

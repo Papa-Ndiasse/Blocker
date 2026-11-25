@@ -205,4 +205,58 @@ class ScreenContentClassifierTest {
         assertNotNull(uninstallTamper)
         assertTrue(uninstallTamper!!.isSettingsTamper)
     }
+
+    @Test
+    fun `blocks websites on browser pages even without URL bar and blocks Keiyoushi 18+ in Mihon and PackageInstaller while keeping Poseidon Scan immune`() {
+        val keiyoushiNames = setOf("toongod", "manytoon", "hentaifox", "comick")
+
+        // 1. Domain extraction from noisy toolbar text
+        val extracted = ScreenContentClassifier.extractDomainsFromText("pornhub.com — Connexion sécurisée")
+        assertTrue("pornhub.com" in extracted)
+
+        // 2. General browser page guard catches adult / Comick pages even when URL bar is hidden
+        val browserPage = ScreenContentClassifier.classifyAppText(
+            "com.sec.android.app.sbrowser",
+            listOf("Comick - Read Manga & Manhwa", "Latest chapters"),
+            isSealed = true
+        )
+        assertNotNull(browserPage)
+
+        // Poseidon Scan stays 100% immune on browsers
+        val poseidonBrowser = ScreenContentClassifier.classifyAppText(
+            "com.sec.android.app.sbrowser",
+            listOf("poseidon-scan.net", "Poseidon Scan", "Chapitre 42"),
+            isSealed = true
+        )
+        assertNull(poseidonBrowser)
+
+        // 3. Mihon blocks Keiyoushi 18+ extensions by display name (including forks like app.mihon.beta)
+        val mihonExt = ScreenContentClassifier.classifyAppText(
+            "app.mihon",
+            listOf("Extensions", "ToonGod (EN)", "Installer"),
+            isSealed = true,
+            blockedKeiyoushiNames = keiyoushiNames
+        )
+        assertNotNull(mihonExt)
+        assertEquals(ScreenContentClassifier.REASON_MIHON_NSFW, mihonExt!!.reason)
+
+        // 4. Samsung PackageInstaller blocks installing Keiyoushi 18+ extension APKs
+        val installerExt = ScreenContentClassifier.classifyAppText(
+            "com.samsung.android.packageinstaller",
+            listOf("Tachiyomi: ManyToon", "Voulez-vous installer cette application ?", "Installer"),
+            isSealed = true,
+            blockedKeiyoushiNames = keiyoushiNames
+        )
+        assertNotNull(installerExt)
+        assertEquals(ScreenContentClassifier.REASON_MIHON_NSFW, installerExt!!.reason)
+
+        // Poseidon Scan extension install stays 100% immune
+        val installerPoseidon = ScreenContentClassifier.classifyAppText(
+            "com.samsung.android.packageinstaller",
+            listOf("Tachiyomi: Poseidon Scan", "Voulez-vous installer cette application ?", "Installer"),
+            isSealed = true,
+            blockedKeiyoushiNames = keiyoushiNames
+        )
+        assertNull(installerPoseidon)
+    }
 }

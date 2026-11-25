@@ -102,30 +102,28 @@ object KeywordFilter {
         "poseidon-scan.net"
     )
 
+    // Single precompiled automaton replaces 190 sequential String.contains() calls per label
+    private val HIGH_CONFIDENCE_TOKEN_REGEX: Regex = Regex(
+        HIGH_CONFIDENCE_TOKENS.joinToString("|") { Regex.escape(it) }
+    )
+
+    private val BOUNDARY_LABEL_REGEX: Regex = Regex(
+        "(^|[.-])(xxx|sex|sexe)($|[.-])"
+    )
+
     fun matches(rawDomain: String): Boolean {
         val domain = rawDomain.trim().lowercase().trimEnd('.')
-        if (domain.isEmpty() || !domain.contains('.')) return false
+        val lastDot = domain.lastIndexOf('.')
+        if (lastDot <= 0 || lastDot >= domain.length - 1) return false
 
         if (isAllowlisted(domain)) return false
 
-        val tld = domain.substringAfterLast('.')
+        val tld = domain.substring(lastDot + 1)
         if (tld in ADULT_TLDS) return true
 
-        val labels = domain.substringBeforeLast('.').split('.')
-        for (label in labels) {
-            if (label == "xxx" || label.startsWith("xxx-") || label.endsWith("-xxx") ||
-                label == "sex" || label.startsWith("sex-") || label.endsWith("-sex") ||
-                label == "sexe" || label.startsWith("sexe-") || label.endsWith("-sexe")
-            ) {
-                return true
-            }
-            for (token in HIGH_CONFIDENCE_TOKENS) {
-                if (label.contains(token)) {
-                    return true
-                }
-            }
-        }
-        return false
+        val body = domain.substring(0, lastDot)
+        if (BOUNDARY_LABEL_REGEX.containsMatchIn(body)) return true
+        return HIGH_CONFIDENCE_TOKEN_REGEX.containsMatchIn(body)
     }
 
     private fun isAllowlisted(domain: String): Boolean {

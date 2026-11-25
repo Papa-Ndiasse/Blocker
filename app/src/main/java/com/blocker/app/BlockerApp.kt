@@ -51,18 +51,25 @@ class BlockerApp : Application() {
 
         // WorkManager requires credential-encrypted storage (user unlocked)
         val userManager = getSystemService(UserManager::class.java)
+        val controller = DeviceOwnerController(this)
+        val isOwner = runCatching { controller.isDeviceOwner() }.getOrDefault(false)
+
         if (userManager.isUserUnlocked) {
             BlocklistSyncWorker.scheduleDaily(this)
-            ProtectionWatchdogWorker.schedule(this)
             SelfUpdateWorker.scheduleHourly(this)
+            if (isOwner) {
+                ProtectionWatchdogWorker.schedule(this)
+            } else {
+                // Avoid 96 pointless 15-min background wakeups/day when Device Owner is not used
+                ProtectionWatchdogWorker.cancel(this)
+            }
             if (preferences.lastSyncEpochMs.value == 0L) {
                 BlocklistSyncWorker.triggerImmediate(this)
             }
         }
 
         // If Device Owner is active, enforce permanent lockdown on app launch
-        val controller = DeviceOwnerController(this)
-        if (controller.isDeviceOwner()) {
+        if (isOwner) {
             controller.enforcePermanentLockdown()
         }
     }

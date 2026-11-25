@@ -46,6 +46,7 @@ class SelfUpdateWorker(
         fun scheduleHourly(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiresBatteryNotLow(true)
                 .build()
 
             val request = PeriodicWorkRequestBuilder<SelfUpdateWorker>(1, TimeUnit.HOURS)

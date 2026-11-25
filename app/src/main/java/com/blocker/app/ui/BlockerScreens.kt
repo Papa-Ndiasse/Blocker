@@ -173,10 +173,13 @@ fun BlockerRootScreen(
                     onSaveGithubToken = viewModel::saveGithubToken
                 )
 
-                1 -> CustomDomainsTab(
-                    customDomains = customDomains.sorted(),
-                    onAddDomain = viewModel::addCustomDomainPermanently
-                )
+                1 -> {
+                    val sortedDomains = remember(customDomains) { customDomains.sorted() }
+                    CustomDomainsTab(
+                        customDomains = sortedDomains,
+                        onAddDomain = viewModel::addCustomDomainPermanently
+                    )
+                }
 
                 2 -> HardeningTab(
                     isDeviceOwner = status.isDeviceOwner,
@@ -1356,18 +1359,18 @@ private fun ProtectionCheckRow(
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
-    val cm = context.getSystemService(ClipboardManager::class.java)
-    cm.setPrimaryClip(ClipData.newPlainText("ADB Command", text))
-    Toast.makeText(context, "Commande ADB copiée", Toast.LENGTH_SHORT).show()
+private val dateTimeFormatter = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE)
+}
+
+private val timeFormatter = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("HH:mm:ss", Locale.FRANCE)
 }
 
 private fun formatDateTime(epochMs: Long): String {
-    val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE)
-    return sdf.format(Date(epochMs))
+    return dateTimeFormatter.get()!!.format(Date(epochMs))
 }
 
 private fun formatTime(epochMs: Long): String {
-    val sdf = SimpleDateFormat("HH:mm:ss", Locale.FRANCE)
-    return sdf.format(Date(epochMs))
+    return timeFormatter.get()!!.format(Date(epochMs))
 }

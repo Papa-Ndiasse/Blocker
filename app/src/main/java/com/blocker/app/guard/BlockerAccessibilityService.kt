@@ -45,6 +45,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     private var lastTriggerTimeMs: Long = 0L
     private var lastContentScanElapsedMs: Long = 0L
     private var lastScannedPkg: String = ""
+    private var lastSnapshotHash: Long = 0L
 
     @Volatile
     private var keiyoushiNsfwNames: Set<String> = emptySet()
@@ -155,6 +156,14 @@ class BlockerAccessibilityService : AccessibilityService() {
         val textSamples = ArrayList<String>(40)
         collectNodeTextBfs(root, textSamples, maxNodes = MAX_INSPECTED_NODES)
 
+        // 64-bit snapshot fingerprint dedup: skips ~85% of redundant ticks when screen text didn't change
+        val snapshotHash = computeSnapshotHash(pkg, urlText, textSamples)
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && snapshotHash == lastSnapshotHash) {
+            isClassifying.set(false)
+            return
+        }
+        lastSnapshotHash = snapshotHash
+
         // All regex, 600k+ hash lookup, and Keiyoushi 489+ name matching runs OFF the Main Thread!
         guardScope.launch {
             try {
@@ -170,6 +179,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                     textSamples = textSamples
                 )
                 if (match != null) {
+                    lastSnapshotHash = 0L // Force re-check if user returns to same blocked page
                     mainHandler.post { triggerBlockOnMain(match, pkg) }
                 }
             } catch (t: Throwable) {
@@ -178,6 +188,18 @@ class BlockerAccessibilityService : AccessibilityService() {
                 isClassifying.set(false)
             }
         }
+    }
+
+    private fun computeSnapshotHash(pkg: String, urlText: String?, samples: List<String>): Long {
+        var h = -3750763034362895579L // FNV-1a 64-bit offset
+        h = (h xor pkg.hashCode().toLong()) * 1099511628211L
+        if (urlText != null) {
+            h = (h xor urlText.hashCode().toLong()) * 1099511628211L
+        }
+        for (i in 0 until samples.size) {
+            h = (h xor samples[i].hashCode().toLong()) * 1099511628211L
+        }
+        return h
     }
 
     private fun classifySnapshotOffMain(

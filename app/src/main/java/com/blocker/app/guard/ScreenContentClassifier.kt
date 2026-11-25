@@ -501,10 +501,8 @@ object ScreenContentClassifier {
 
         // 3. Reddit native app (or Reddit web inside browser)
         if (packageName in REDDIT_PACKAGES || (isBrowser && joined.contains("reddit"))) {
-            for (indicator in REDDIT_NSFW_INDICATORS) {
-                if (containsBoundaryOrPhrase(joined, indicator)) {
-                    return ScreenBlockMatch(REASON_REDDIT_NSFW, indicator)
-                }
+            matchIndicatorsFast(joined, REDDIT_PHRASE_INDICATORS, REDDIT_WORD_REGEX)?.let { hit ->
+                return ScreenBlockMatch(REASON_REDDIT_NSFW, hit)
             }
             val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
             if (explicitMatch != null) {
@@ -536,10 +534,8 @@ object ScreenContentClassifier {
             if (matchedExt != null) {
                 return ScreenBlockMatch(REASON_MIHON_NSFW, "keiyoushi:$matchedExt")
             }
-            for (indicator in MIHON_NSFW_INDICATORS) {
-                if (containsBoundaryOrPhrase(joined, indicator)) {
-                    return ScreenBlockMatch(REASON_MIHON_NSFW, indicator)
-                }
+            matchIndicatorsFast(joined, MIHON_PHRASE_INDICATORS, MIHON_WORD_REGEX)?.let { hit ->
+                return ScreenBlockMatch(REASON_MIHON_NSFW, hit)
             }
             val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
             if (explicitMatch != null) {
@@ -562,10 +558,8 @@ object ScreenContentClassifier {
         // 7. Other monitored social/messaging/search apps
         if (packageName in SOCIAL_MONITORED_PACKAGES) {
             if (isImmuneText(joined)) return null
-            for (indicator in listOf("18+", "nsfw", "contenu pour adultes", "mature content", "adult content", "potentially sensitive")) {
-                if (containsBoundaryOrPhrase(joined, indicator)) {
-                    return ScreenBlockMatch(REASON_APP_NSFW, indicator)
-                }
+            matchIndicatorsFast(joined, SOCIAL_PHRASE_INDICATORS, SOCIAL_WORD_REGEX)?.let { hit ->
+                return ScreenBlockMatch(REASON_APP_NSFW, hit)
             }
             val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
             if (explicitMatch != null) {
@@ -666,8 +660,37 @@ object ScreenContentClassifier {
         "pdf", "zip", "rar", "7z", "txt", "json", "xml", "html", "htm", "css", "js", "php"
     )
 
+    private fun isPhraseIndicator(s: String): Boolean =
+        s.contains(' ') || s.contains('/') || s.contains('#') || s.contains('+') || s.contains('.')
+
+    private fun buildWordBoundaryRegex(items: List<String>): Regex? {
+        val words = items.filterNot(::isPhraseIndicator)
+        if (words.isEmpty()) return null
+        return Regex("\\b(" + words.joinToString("|") { Regex.escape(it) } + ")\\b")
+    }
+
+    // Precompiled once at class init (zero runtime Regex allocations on Galaxy A55!)
+    private val REDDIT_PHRASE_INDICATORS = REDDIT_NSFW_INDICATORS.filter(::isPhraseIndicator)
+    private val REDDIT_WORD_REGEX = buildWordBoundaryRegex(REDDIT_NSFW_INDICATORS)
+
+    private val MIHON_PHRASE_INDICATORS = MIHON_NSFW_INDICATORS.filter(::isPhraseIndicator)
+    private val MIHON_WORD_REGEX = buildWordBoundaryRegex(MIHON_NSFW_INDICATORS)
+
+    private val SOCIAL_INDICATORS = listOf(
+        "18+", "nsfw", "contenu pour adultes", "mature content", "adult content", "potentially sensitive"
+    )
+    private val SOCIAL_PHRASE_INDICATORS = SOCIAL_INDICATORS.filter(::isPhraseIndicator)
+    private val SOCIAL_WORD_REGEX = buildWordBoundaryRegex(SOCIAL_INDICATORS)
+
+    private fun matchIndicatorsFast(text: String, phrases: List<String>, wordRegex: Regex?): String? {
+        for (phrase in phrases) {
+            if (text.contains(phrase)) return phrase
+        }
+        return wordRegex?.find(text)?.value
+    }
+
     private fun containsBoundaryOrPhrase(text: String, needle: String): Boolean {
-        if (needle.contains(' ') || needle.contains('/') || needle.contains('#') || needle.contains('+')) {
+        if (isPhraseIndicator(needle)) {
             return text.contains(needle)
         }
         return Regex("\\b${Regex.escape(needle)}\\b").containsMatchIn(text)

@@ -38,6 +38,9 @@ android {
         buildConfigField("String", "GITHUB_UPDATE_TOKEN", "\"$resolvedUpdateToken\"")
         buildConfigField("boolean", "EMERGENCY_DISABLE", resolvedEmergencyDisable.toString())
 
+        // Strip ~70 unused AndroidX translation packs (keep only FR + EN)
+        resourceConfigurations += listOf("fr", "en")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -57,7 +60,7 @@ android {
 
     buildTypes {
         release {
-            // R8 code & resource shrinking: reduces APK from ~41 MB to ~6 MB and cuts RAM/startup overhead on Galaxy A55
+            // R8 full-mode code & resource shrinking for minimal APK size, RAM, and cold-start latency
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
@@ -84,7 +87,12 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "DebugProbesKt.bin",
+                "/META-INF/*.version",
+                "kotlin-tooling-metadata.json"
+            )
         }
     }
 }

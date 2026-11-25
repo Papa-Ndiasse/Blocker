@@ -213,30 +213,23 @@ class BlocklistRepository(
         private const val BINARY_CACHE_NAME = "merged_adult_blocklist.bin"
 
         /**
-         * 10 verified live (HTTP 200) community blocklists covering >1.2M unique domains:
+         * Curated live (HTTP 200) community blocklists (~600k unique domains, <6 MB RAM):
          * real porn, hentai/drawn/booru/comics, JAV/Asian, AI porn/deepfakes, leaks,
-         * DoH/VPN/Tor/proxy bypasses, and non-SafeSearch search engines.
+         * DoH/VPN/Tor/proxy bypasses, and non-SafeSearch search engines — kept lean to avoid
+         * memory pressure on mid-range Android devices.
          */
         val REMOTE_SOURCES = listOf(
             // 1. OISD NSFW (~498k domains: gold standard porn/shock/hentai/JAV/AI)
             "https://nsfw.oisd.nl/domainswild2",
-            // 2. The Block List Project - Porn (~953k domains)
-            "https://blocklistproject.github.io/Lists/alt-version/porn-nl.txt",
-            // 3. ShadowWhisperer Adult (~214k domains)
-            "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/RAW/Adult",
-            // 4. HaGeZi NSFW (~87k curated domains)
+            // 2. HaGeZi NSFW (~87k curated domains)
             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/nsfw-onlydomains.txt",
-            // 5. StevenBlack Porn-only hosts (~77k domains)
-            "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts",
-            // 6. 4skinSkywalker Anti-Porn hosts (~71k domains)
-            "https://raw.githubusercontent.com/4skinSkywalker/Anti-Porn-HOSTS-File/master/HOSTS.txt",
-            // 7. HaGeZi DoH / VPN / Tor / Proxy Bypass (~17k domains)
+            // 3. HaGeZi DoH / VPN / Tor / Proxy Bypass (~17k domains)
             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-vpn-proxy-bypass-onlydomains.txt",
-            // 8. HaGeZi Search Engines Not Supporting SafeSearch (115 domains)
+            // 4. HaGeZi Search Engines Not Supporting SafeSearch (115 domains)
             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/nosafesearch-onlydomains.txt",
-            // 9. UT1 Université Toulouse - Mixed Adult (FR/EU adult & borderline)
+            // 5. UT1 Université Toulouse - Mixed Adult (FR/EU adult & borderline)
             "https://raw.githubusercontent.com/olbat/ut1-blacklists/master/blacklists/mixed_adult/domains",
-            // 10. UT1 Université Toulouse - Lingerie / Borderline
+            // 6. UT1 Université Toulouse - Lingerie / Borderline
             "https://raw.githubusercontent.com/olbat/ut1-blacklists/master/blacklists/lingerie/domains"
         )
 

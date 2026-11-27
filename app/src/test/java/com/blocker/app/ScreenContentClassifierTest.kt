@@ -306,6 +306,27 @@ class ScreenContentClassifierTest {
                 isSealed = true
             )
         )
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("u/onlyfans_bella", "Link in bio"),
+                isSealed = true
+            )
+        )
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("Photo post", "__viewid_nsfw__"),
+                isSealed = true
+            )
+        )
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("First time posting [F]", "Rate my body"),
+                isSealed = true
+            )
+        )
         // SFW photography subreddits like r/FoodPorn and r/EarthPorn must NOT false-positive
         assertNull(
             ScreenContentClassifier.classifyAppText(

@@ -67,6 +67,14 @@
             android:launchMode="singleTop"
             android:theme="@style/Theme.Blocker" />
 
+        <activity
+            android:name=".ui.LockoutActivity"
+            android:directBootAware="true"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Blocker" />
+
         <!-- Real-Time On-Screen & In-App Content Guard (Reddit, X, Browsers, Social Apps, Anti-Tamper) -->
         <service
             android:name=".guard.BlockerAccessibilityService"

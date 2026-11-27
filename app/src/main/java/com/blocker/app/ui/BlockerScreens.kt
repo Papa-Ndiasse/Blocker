@@ -765,6 +765,7 @@ private fun DashboardTab(
                     ProtectionCheckRow("Anti-Tor & Proxys (Play Store & lancement)", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
                     ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
                     ProtectionCheckRow("Batterie illimitée (Anti-Veille Profonde Samsung)", status.isBatteryOptimizationIgnored)
+                    ProtectionCheckRow("Pause forcée (3 blocages / 10 min → 5 → 10 → 20 → 40 → 60 min)", status.isAccessibilityGuardEnabled)
                     ProtectionCheckRow("Immunité totale : poseidon-scan.net & Discord", true)
                     ProtectionCheckRow("Anti-Mode Sans Échec & Multi-Utilisateurs", status.isSafeBootLocked && status.isMultiUserLocked)
                     ProtectionCheckRow(

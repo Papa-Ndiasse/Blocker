@@ -2,6 +2,7 @@
 -keep class com.blocker.app.BlockerApp { *; }
 -keep class com.blocker.app.MainActivity { *; }
 -keep class com.blocker.app.ui.BlockedActivity { *; }
+-keep class com.blocker.app.ui.LockoutActivity { *; }
 -keep class com.blocker.app.guard.BlockerAccessibilityService { *; }
 -keep class com.blocker.app.admin.BlockerDeviceAdminReceiver { *; }
 -keep class com.blocker.app.admin.PackageInstallReceiver { *; }

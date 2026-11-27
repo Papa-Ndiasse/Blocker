@@ -14,6 +14,7 @@ import com.blocker.app.BlockerApp
 import com.blocker.app.BuildConfig
 import com.blocker.app.filter.FilterDecision
 import com.blocker.app.ui.BlockedActivity
+import com.blocker.app.ui.LockoutActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,12 +30,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Ultra-lightweight, zero-ANR On-Screen & In-App Content Guard for Samsung Galaxy A55 / One UI:
- *   - ZERO PackageManager.getInstalledPackages() Binder storms (uses pre-built 489+ Keiyoushi offline list)
- *   - AT MOST 1 single findAccessibilityNodeInfosByViewId() call per browser via direct Map lookup
- *   - Bounded 50-node FIFO BFS extraction on main thread (<1.5ms), then ALL regex/domain/hash
- *     classification runs OFF the Main Thread on Dispatchers.Default with AtomicBoolean backpressure
- *   - 450ms debounce on TYPE_WINDOW_CONTENT_CHANGED (0ms on TYPE_WINDOW_STATE_CHANGED)
- *   - Full Throwable isolation so the service can NEVER crash or stall One UI / SystemUI
+ *   - Enforces progressive phone lockout (3 blocks in 10 min -> 5 -> 10 -> 20 -> 40 -> 60 min within same hour)
+ *   - Captures graphical/icon-only Reddit & X NSFW/18+ badges via viewIdResourceName (0 extra Binder calls)
+ *   - 180-node BFS on Reddit/X/Mihon feeds + 220ms responsiveness; 55-node BFS on other monitored apps
+ *   - ALL regex/domain/hash classification runs OFF the Main Thread with AtomicBoolean backpressure
+ *   - 64-bit snapshot fingerprint dedup skips ~85% of redundant screen ticks
+ *   - 0ms instant early exit for immune everyday apps (Discord, TikTok, Snapchat, Instagram, YouTube, WhatsApp)
  */
 class BlockerAccessibilityService : AccessibilityService() {
 
@@ -43,6 +44,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     private val isClassifying = AtomicBoolean(false)
 
     private var lastTriggerTimeMs: Long = 0L
+    private var lastLockoutLaunchElapsedMs: Long = 0L
     private var lastContentScanElapsedMs: Long = 0L
     private var lastScannedPkg: String = ""
     private var lastSnapshotHash: Long = 0L
@@ -65,7 +67,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
 
         _isRunning.value = true
-        Log.i(TAG, "BlockerAccessibilityService connected (ultra-safe A55 One UI mode)")
+        Log.i(TAG, "BlockerAccessibilityService connected (A55 One UI + progressive lockout)")
 
         guardScope.launch {
             keiyoushiNsfwNames = loadNameAsset(KEIYOUSHI_NSFW_NAMES_ASSET)
@@ -87,15 +89,26 @@ class BlockerAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
 
+        val app = application as? BlockerApp ?: return
+
+        // 0a. Active progressive phone lockout enforcement (blocks ALL apps except Phone/Emergency/SystemUI/AOD)
+        val nowWall = System.currentTimeMillis()
+        val lockoutState = app.preferences.loadLockoutState()
+        if (CooldownLockoutEngine.isLockoutActive(lockoutState, nowWall)) {
+            if (pkg !in EMERGENCY_AND_SYSTEM_ALLOWED_DURING_LOCKOUT && !LockoutActivity.isVisible) {
+                launchLockoutOverlaySafely()
+            }
+            return
+        }
+
         // Never inspect SystemUI, One UI Home, Keyboard, or immune everyday apps (Discord, TikTok, Snapchat, Instagram, YouTube, WhatsApp)
         if (pkg in IGNORED_SYSTEM_PACKAGES || pkg in ScreenContentClassifier.IMMUNE_PACKAGES) return
 
-        val app = application as? BlockerApp ?: return
         val flags = app.preferences.hardening.value
         val isSealed = flags.sealPermanentProtection
         val lockMixedMihon = flags.lockMihonMixedExtensions
 
-        // 0. Instant 0ms block on launching Tor, proxy browsers, Secure Folder (if latched), or locked Reddit/X
+        // 0b. Instant 0ms block on launching Tor, proxy browsers, Secure Folder (if latched), or locked Reddit/X
         val launchMatch = ScreenContentClassifier.classifyLaunchedPackage(
             packageName = pkg,
             lockRedditEntirely = flags.lockRedditEntirely,
@@ -109,6 +122,8 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         val isBrowser = ScreenContentClassifier.isBrowserPackage(pkg)
         val isMihon = ScreenContentClassifier.isMihonPackage(pkg)
+        val isRedditOrX = pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
+            pkg in ScreenContentClassifier.X_PACKAGES
         val isStoreOrInstaller = pkg in ScreenContentClassifier.STORE_AND_INSTALLER_PACKAGES ||
             pkg.contains("packageinstaller")
         val isSettings = pkg in ScreenContentClassifier.SETTINGS_PACKAGES ||
@@ -117,18 +132,15 @@ class BlockerAccessibilityService : AccessibilityService() {
         // Fast early exit BEFORE touching rootInActiveWindow
         val shouldInspect = isBrowser ||
             isMihon ||
+            isRedditOrX ||
             isStoreOrInstaller ||
             isSettings ||
-            pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
-            pkg in ScreenContentClassifier.X_PACKAGES ||
             pkg in ScreenContentClassifier.SOCIAL_MONITORED_PACKAGES
 
         if (!shouldInspect) return
 
         // Backpressure: if previous background classification is still running, drop this frame cleanly
-        val isHighRiskFeed = pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
-            pkg in ScreenContentClassifier.X_PACKAGES ||
-            isMihon
+        val isHighRiskFeed = isRedditOrX || isMihon
         val debounceMs = if (isHighRiskFeed) FEED_SCAN_DEBOUNCE_MS else CONTENT_SCAN_DEBOUNCE_MS
         val eventType = event.eventType
         val nowElapsed = SystemClock.elapsedRealtime()
@@ -145,8 +157,8 @@ class BlockerAccessibilityService : AccessibilityService() {
         lastScannedPkg = pkg
         lastContentScanElapsedMs = nowElapsed
 
-        // Fast, bounded snapshot on main thread: 120 nodes on Reddit/X/Mihon (to reach feed posts & 18+ pills
-        // past top chrome), 55 nodes on other apps.
+        // Bounded BFS snapshot on main thread: 180 nodes on Reddit/X/Mihon (reaches deep feed posts & 18+ icons),
+        // 55 nodes on other monitored apps.
         val root = try {
             rootInActiveWindow
         } catch (_: Throwable) {
@@ -160,7 +172,12 @@ class BlockerAccessibilityService : AccessibilityService() {
         val urlText = if (isBrowser) extractSingleBrowserUrl(root, pkg) else null
         val maxNodes = if (isHighRiskFeed) MAX_FEED_INSPECTED_NODES else MAX_INSPECTED_NODES
         val textSamples = ArrayList<String>(maxNodes)
-        collectNodeTextBfs(root, textSamples, maxNodes = maxNodes)
+        collectNodeTextBfs(
+            node = root,
+            out = textSamples,
+            maxNodes = maxNodes,
+            inspectNsfwViewIds = isRedditOrX
+        )
 
         // 64-bit snapshot fingerprint dedup: skips ~85% of redundant ticks when screen text didn't change
         val snapshotHash = computeSnapshotHash(pkg, urlText, textSamples)
@@ -313,6 +330,26 @@ class BlockerAccessibilityService : AccessibilityService() {
         return out
     }
 
+    private fun launchLockoutOverlaySafely() {
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (nowElapsed - lastLockoutLaunchElapsedMs < LOCKOUT_RELAUNCH_COOLDOWN_MS) return
+        lastLockoutLaunchElapsedMs = nowElapsed
+
+        try {
+            val intent = Intent(this, LockoutActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not launch LockoutActivity: ${e.message}")
+            runCatching { performGlobalAction(GLOBAL_ACTION_HOME) }
+        }
+    }
+
     private fun triggerBlockOnMain(match: ScreenBlockMatch, sourcePackage: String) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastTriggerTimeMs < TRIGGER_COOLDOWN_MS) return
@@ -321,16 +358,32 @@ class BlockerAccessibilityService : AccessibilityService() {
         Log.w(TAG, "Blocked screen content in $sourcePackage: ${match.reason} (${match.detail})")
 
         val app = application as? BlockerApp
-        if (!match.isSettingsTamper) {
-            app?.preferences?.recordBlocked(sourcePackage, match.reason)
+        var triggeredLockout = false
+        if (!match.isSettingsTamper && app != null) {
+            app.preferences.recordBlocked(sourcePackage, match.reason)
+
+            // Record strike for progressive lockout: 3 blocks in 10 min -> 5 -> 10 -> 20 -> 40 -> 60 min
+            val currentLockout = app.preferences.loadLockoutState()
+            val outcome = CooldownLockoutEngine.recordContentBlockStrike(
+                state = currentLockout,
+                nowMs = System.currentTimeMillis()
+            )
+            app.preferences.saveLockoutState(outcome.newState)
+            triggeredLockout = outcome.triggeredLockout
         }
 
         runCatching {
-            if (match.isSettingsTamper || match.goHomeImmediately) {
+            if (triggeredLockout || match.isSettingsTamper || match.goHomeImmediately) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
             } else {
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
+        }
+
+        if (triggeredLockout) {
+            lastLockoutLaunchElapsedMs = 0L
+            launchLockoutOverlaySafely()
+            return
         }
 
         try {
@@ -350,8 +403,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Direct O(1) lookup: performs AT MOST 1 single Binder IPC call for the active browser package
-     * (never loops through 20 unrelated browser view IDs).
+     * Direct O(1) lookup: performs AT MOST 1 single Binder IPC call for the active browser package.
      */
     private fun extractSingleBrowserUrl(root: AccessibilityNodeInfo, pkg: String): String? {
         val viewId = BROWSER_URL_VIEW_ID_MAP[pkg] ?: return null
@@ -366,13 +418,15 @@ class BlockerAccessibilityService : AccessibilityService() {
     private fun collectNodeTextBfs(
         node: AccessibilityNodeInfo?,
         out: MutableList<String>,
-        maxNodes: Int
+        maxNodes: Int,
+        inspectNsfwViewIds: Boolean
     ) {
         if (node == null || out.size >= maxNodes) return
 
-        val queue = ArrayDeque<AccessibilityNodeInfo>(32)
+        val queue = ArrayDeque<AccessibilityNodeInfo>(48)
         queue.addLast(node)
         var visited = 0
+        val childCap = if (inspectNsfwViewIds) 36 else 24
 
         while (queue.isNotEmpty() && visited < maxNodes) {
             val current = queue.removeFirst()
@@ -395,12 +449,31 @@ class BlockerAccessibilityService : AccessibilityService() {
                 out.add(desc)
             }
 
+            // Detect graphical/icon-only NSFW or 18+ badges on Reddit & X (0 extra Binder calls!)
+            if (inspectNsfwViewIds) {
+                val resId = try {
+                    current.viewIdResourceName?.lowercase()
+                } catch (_: Throwable) {
+                    null
+                }
+                if (resId != null && (
+                        resId.contains("nsfw") ||
+                            resId.contains("over18") ||
+                            resId.contains("over_18") ||
+                            resId.contains("adult_content") ||
+                            resId.contains("sensitive_media")
+                        )
+                ) {
+                    out.add("__viewid_nsfw__")
+                }
+            }
+
             val childCount = try {
                 current.childCount
             } catch (_: Throwable) {
                 0
             }
-            val limit = childCount.coerceAtMost(24)
+            val limit = childCount.coerceAtMost(childCap)
             for (i in 0 until limit) {
                 val child = try {
                     current.getChild(i)
@@ -415,10 +488,11 @@ class BlockerAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "BlockerA11yGuard"
         private const val TRIGGER_COOLDOWN_MS = 1000L
+        private const val LOCKOUT_RELAUNCH_COOLDOWN_MS = 1200L
         private const val CONTENT_SCAN_DEBOUNCE_MS = 450L
         private const val FEED_SCAN_DEBOUNCE_MS = 220L
         private const val MAX_INSPECTED_NODES = 55
-        private const val MAX_FEED_INSPECTED_NODES = 120
+        private const val MAX_FEED_INSPECTED_NODES = 180
         private const val KEIYOUSHI_NSFW_NAMES_ASSET = "keiyoushi_nsfw_names.txt"
         private const val KEIYOUSHI_MIXED_NAMES_ASSET = "keiyoushi_mixed_names.txt"
 
@@ -432,6 +506,21 @@ class BlockerAccessibilityService : AccessibilityService() {
             "com.discord.beta",
             "com.discord.canary",
             "com.discord.alpha"
+        )
+
+        // Packages that MUST stay accessible during a progressive phone lockout for safety & stability
+        private val EMERGENCY_AND_SYSTEM_ALLOWED_DURING_LOCKOUT = setOf(
+            "com.android.systemui",
+            "com.samsung.android.app.aodservice",
+            "com.samsung.android.honeyboard",
+            "com.google.android.inputmethod.latin",
+            "com.samsung.android.dialer",
+            "com.samsung.android.incallui",
+            "com.android.phone",
+            "com.android.server.telecom",
+            "com.android.emergency",
+            "com.samsung.android.emergency",
+            "com.google.android.dialer"
         )
 
         private val _isRunning = MutableStateFlow(false)

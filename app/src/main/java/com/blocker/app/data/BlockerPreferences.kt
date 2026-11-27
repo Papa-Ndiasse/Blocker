@@ -228,6 +228,33 @@ class BlockerPreferences(context: Context) {
         _hardening.value = loadHardeningFlags()
     }
 
+    @Synchronized
+    fun loadLockoutState(): com.blocker.app.guard.LockoutState {
+        val csv = prefs.getString(KEY_LOCKOUT_STRIKES, "").orEmpty()
+        val strikes = if (csv.isBlank()) {
+            emptyList()
+        } else {
+            csv.split(',').mapNotNull { it.trim().toLongOrNull() }
+        }
+        return com.blocker.app.guard.LockoutState(
+            lockoutUntilMs = prefs.getLong(KEY_LOCKOUT_UNTIL_MS, 0L),
+            lastLockoutEndMs = prefs.getLong(KEY_LAST_LOCKOUT_END_MS, 0L),
+            escalationLevel = prefs.getInt(KEY_LOCKOUT_LEVEL, 0),
+            recentStrikeTimestamps = strikes
+        )
+    }
+
+    @Synchronized
+    fun saveLockoutState(state: com.blocker.app.guard.LockoutState) {
+        val csv = state.recentStrikeTimestamps.joinToString(",")
+        prefs.edit()
+            .putLong(KEY_LOCKOUT_UNTIL_MS, state.lockoutUntilMs)
+            .putLong(KEY_LAST_LOCKOUT_END_MS, state.lastLockoutEndMs)
+            .putInt(KEY_LOCKOUT_LEVEL, state.escalationLevel)
+            .putString(KEY_LOCKOUT_STRIKES, csv)
+            .apply()
+    }
+
     /**
      * Strictly gated by compile-time BuildConfig.EMERGENCY_DISABLE: cannot ever run
      * in a normal release build, only in an emergency GitHub recovery update.
@@ -240,6 +267,10 @@ class BlockerPreferences(context: Context) {
             .putBoolean(KEY_LOCK_REDDIT, false)
             .putBoolean(KEY_LOCK_X, false)
             .putBoolean(KEY_LOCK_SECURE_FOLDER, false)
+            .putLong(KEY_LOCKOUT_UNTIL_MS, 0L)
+            .putLong(KEY_LAST_LOCKOUT_END_MS, 0L)
+            .putInt(KEY_LOCKOUT_LEVEL, 0)
+            .putString(KEY_LOCKOUT_STRIKES, "")
             .apply()
         _hardening.value = loadHardeningFlags()
     }
@@ -264,6 +295,10 @@ class BlockerPreferences(context: Context) {
         private const val KEY_LOCK_MIHON_MIXED = "lock_mihon_mixed"
         private const val KEY_LOCK_SECURE_FOLDER = "lock_samsung_secure_folder"
         private const val KEY_LOCK_FACTORY_RESET = "lock_factory_reset"
+        private const val KEY_LOCKOUT_UNTIL_MS = "lockout_until_ms"
+        private const val KEY_LAST_LOCKOUT_END_MS = "last_lockout_end_ms"
+        private const val KEY_LOCKOUT_LEVEL = "lockout_escalation_level"
+        private const val KEY_LOCKOUT_STRIKES = "lockout_strike_timestamps"
         private const val MAX_RECENT_EVENTS = 50
 
         fun normalizeDomainInput(input: String): String? {

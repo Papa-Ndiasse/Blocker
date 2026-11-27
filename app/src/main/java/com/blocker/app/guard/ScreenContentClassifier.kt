@@ -208,13 +208,19 @@ object ScreenContentClassifier {
             "porn", "porno", "pornography", "xxx", "xvideos", "xnxx", "pornhub",
             "xhamster", "redtube", "youporn", "spankbang", "eporner", "chaturbate",
             "stripchat", "bongacams", "onlyfans", "fansly", "mym\\.fans", "camgirl", "redgifs",
-            "nude", "nudes", "nudity", "naked", "boobs", "boobies", "tits", "titties", "pussy",
+            "nude", "nudes", "nudity", "naked", "topless", "braless", "panties", "thong",
+            "underboob", "sideboob", "cameltoe", "boobs", "boobies", "tits", "titties", "pussy",
             "vagina", "penis", "blowjob", "handjob", "creampie", "bukkake", "gangbang",
             "cumshot", "cumslut", "milf", "gilf", "bdsm", "fetish", "erotic", "erotica",
-            "sextape", "sexvideo", "sexvid", "masturbation", "orgasm", "dildo", "vibrator",
+            "sextape", "sexvideo", "sexvid", "masturbation", "orgasm", "squirt", "squirting",
+            "dildo", "vibrator", "striptease", "dominatrix", "domme", "sexting", "kinky",
             "gonewild", "realgirls", "celebnsfw", "leakednudes", "fappening", "thirsttrap",
             "lingerie", "boudoir", "gooning", "fap", "jerkoff", "horny", "upskirt", "cleavage",
-            "nipples", "areolas", "pokies", "bikini\\s*haul", "try\\s*on\\s*haul",
+            "nipples", "areolas", "pokies", "bikini", "booty", "pawg", "busty",
+            "link\\s*in\\s*bio", "lien\\s*en\\s*bio", "mon\\s*onlyfans", "mon\\s*mym",
+            "free\\s*onlyfans", "rate\\s*my\\s*body", "smash\\s*or\\s*pass", "cum\\s*tribute",
+            "dick\\s*rate", "cock\\s*rate", "foot\\s*fetish", "thigh\\s*highs", "fishnets",
+            "18f", "19f", "20f", "f18", "f19", "f20",
             "hentai", "hanime", "nhentai", "doujin", "doujinshi", "rule34", "r34",
             "ecchi", "ahegao", "oppai", "paizuri", "futanari", "yiff", "furryporn",
             "gelbooru", "danbooru", "e621", "lewd", "waifusgonewild", "animeplot",
@@ -230,10 +236,10 @@ object ScreenContentClassifier {
         RegexOption.IGNORE_CASE
     )
 
-    // Catches tens of thousands of NSFW & borderline subreddits by r/<name> pattern
+    // Catches tens of thousands of NSFW & borderline subreddits (r/...) AND creator profiles (u/...)
     // while explicitly allowing SFW photography/hobby subs like r/EarthPorn, r/FoodPorn, etc.
     private val REDDIT_SUBREDDIT_REGEX = Regex(
-        "\\br/([a-z0-9_]{2,40})\\b",
+        "\\b[ru]/([a-z0-9_-]{2,40})\\b",
         RegexOption.IGNORE_CASE
     )
 
@@ -258,12 +264,15 @@ object ScreenContentClassifier {
             "waifu|oppai|ahegao|futanari|creampie|blowjob|anal|bondage|bimbo|sissy|" +
             "femboy|bbw|redgifs|nudism|naturism|exhibition|voyeur|cuckold|swingers|" +
             "celeb|fappening|instahotties|igmodels|modelsgonewild|ohlympics|holdthemoan|" +
-            "legalteens|barelylegal|breeding|dirtyr4r|gothsluts|girlsfinish)",
+            "legalteens|barelylegal|breeding|dirtyr4r|gothsluts|girlsfinish|topless|" +
+            "braless|panties|thong|underboob|sideboob|cameltoe)",
         RegexOption.IGNORE_CASE
     )
 
     private val REDDIT_NSFW_INDICATORS = listOf(
+        "__viewid_nsfw__",
         "nsfw", "18+", "over 18", "over18", "include_over_18", "not safe for work",
+        "[f]", "(f)", "[f4m]", "[f4a]", "[f4f]", "[m4f]",
         "plus de 18 ans", "j'ai plus de 18 ans", "confirmez que vous avez plus de 18",
         "contenu pour adultes", "contenu réservé aux adultes", "réservé aux adultes",
         "communauté 18+", "communauté pour adultes", "communauté réservée aux adultes",
@@ -277,6 +286,7 @@ object ScreenContentClassifier {
     )
 
     private val X_SENSITIVE_INDICATORS = listOf(
+        "__viewid_nsfw__",
         "potentially sensitive content", "includes potentially sensitive",
         "may include sensitive content", "contenu potentiellement sensible",
         "contenir du contenu sensible", "age-restricted adult content",
@@ -765,7 +775,8 @@ object ScreenContentClassifier {
     }
 
     private fun isPhraseIndicator(s: String): Boolean =
-        s.contains(' ') || s.contains('/') || s.contains('#') || s.contains('+') || s.contains('.')
+        s.contains(' ') || s.contains('/') || s.contains('#') || s.contains('+') ||
+            s.contains('.') || s.contains('[') || s.contains('(') || s.contains('_')
 
     private fun buildWordBoundaryRegex(items: List<String>): Regex? {
         val words = items.filterNot(::isPhraseIndicator)

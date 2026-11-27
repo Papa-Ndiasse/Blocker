@@ -16,8 +16,9 @@ import com.blocker.app.admin.EmergencyKillSwitch
 import java.util.concurrent.TimeUnit
 
 /**
- * Periodically downloads and merges community NSFW DNS blocklists (HaGeZi, OISD, StevenBlack)
- * and atomically reloads the running DnsFilterEngine.
+ * Periodically downloads and merges curated NSFW blocklists (~3 MB compressed)
+ * STRICTLY OVER WI-FI (NetworkType.UNMETERED) and NEVER uses 4G/5G cellular data.
+ * Never returns Result.retry() to make infinite download loops mathematically impossible.
  */
 class BlocklistSyncWorker(
     appContext: Context,
@@ -26,15 +27,20 @@ class BlocklistSyncWorker(
 
     override suspend fun doWork(): Result {
         if (EmergencyKillSwitch.isActive()) return Result.success()
-        val app = applicationContext as? BlockerApp ?: return Result.failure()
-        val result = app.blocklistRepository.syncRemoteBlocklists()
-        return if (result.success) {
-            app.reloadFilterEngine()
-            Log.i(TAG, "Blocklist sync complete: ${result.totalDomains} domains")
+        if (runAttemptCount > 0) return Result.success()
+        val app = applicationContext as? BlockerApp ?: return Result.success()
+        return try {
+            val result = app.blocklistRepository.syncRemoteBlocklists()
+            if (result.success) {
+                app.reloadFilterEngine()
+                Log.i(TAG, "Wi-Fi blocklist sync complete: ${result.totalDomains} domains")
+            } else {
+                Log.w(TAG, "Wi-Fi blocklist sync skipped: ${result.errorMessage}")
+            }
             Result.success()
-        } else {
-            Log.w(TAG, "Blocklist sync retry: ${result.errorMessage}")
-            Result.retry()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Blocklist sync aborted safely (no retry loop): ${t.message}")
+            Result.success()
         }
     }
 
@@ -45,24 +51,28 @@ class BlocklistSyncWorker(
 
         fun scheduleDaily(context: Context) {
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                // STRICTLY Wi-Fi only: 0.00 MB of 4G/5G mobile data!
+                .setRequiredNetworkType(NetworkType.UNMETERED)
                 .setRequiresBatteryNotLow(true)
                 .build()
 
-            val request = PeriodicWorkRequestBuilder<BlocklistSyncWorker>(24, TimeUnit.HOURS)
+            val request = PeriodicWorkRequestBuilder<BlocklistSyncWorker>(7, TimeUnit.DAYS)
                 .setConstraints(constraints)
                 .build()
 
+            // UPDATE overwrites any older v1.0.x job that allowed 4G (NetworkType.CONNECTED)
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 PERIODIC_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
         }
 
         fun triggerImmediate(context: Context) {
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                // STRICTLY Wi-Fi only: never burns mobile data on first launch!
+                .setRequiredNetworkType(NetworkType.UNMETERED)
+                .setRequiresBatteryNotLow(true)
                 .build()
             val request = OneTimeWorkRequestBuilder<BlocklistSyncWorker>()
                 .setConstraints(constraints)
@@ -70,7 +80,7 @@ class BlocklistSyncWorker(
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 INITIAL_WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.REPLACE,
                 request
             )
         }

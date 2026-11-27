@@ -72,22 +72,28 @@ class GitHubAutoUpdater(
             val isOwner = controller.isDeviceOwner()
 
             val apkFile = File(deviceContext.cacheDir, PENDING_APK_NAME)
-            downloadAssetToFile(
-                urlString = release.apkDownloadUrl,
-                token = token,
-                isApiAssetUrl = release.isApiAssetUrl,
-                destination = apkFile
-            )
-
-            // Verify SHA-256 integrity before touching PackageInstaller
             val expectedHash = release.expectedSha256?.trim()?.lowercase()
-            if (!expectedHash.isNullOrEmpty()) {
-                val actualHash = sha256Hex(apkFile)
-                if (actualHash != expectedHash) {
-                    apkFile.delete()
-                    return@withContext UpdateCheckResult.Error(
-                        "Intégrité SHA-256 invalide pour la mise à jour ${release.versionName}"
-                    )
+            val alreadyCachedValid = apkFile.exists() && apkFile.length() > 0L &&
+                !expectedHash.isNullOrEmpty() &&
+                runCatching { sha256Hex(apkFile) == expectedHash }.getOrDefault(false)
+
+            if (!alreadyCachedValid) {
+                downloadAssetToFile(
+                    urlString = release.apkDownloadUrl,
+                    token = token,
+                    isApiAssetUrl = release.isApiAssetUrl,
+                    destination = apkFile
+                )
+
+                // Verify SHA-256 integrity before touching PackageInstaller
+                if (!expectedHash.isNullOrEmpty()) {
+                    val actualHash = sha256Hex(apkFile)
+                    if (actualHash != expectedHash) {
+                        apkFile.delete()
+                        return@withContext UpdateCheckResult.Error(
+                            "Intégrité SHA-256 invalide pour la mise à jour ${release.versionName}"
+                        )
+                    }
                 }
             }
 

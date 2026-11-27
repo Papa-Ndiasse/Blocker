@@ -55,6 +55,18 @@ class BlockerApp : Application() {
         val isOwner = runCatching { controller.isDeviceOwner() }.getOrDefault(false)
 
         if (userManager.isUserUnlocked) {
+            // One-time cleanup of any legacy 4G WorkManager retry jobs left over from v1.0.3-v1.0.12
+            val migrationPrefs = createDeviceProtectedStorageContext()
+                .getSharedPreferences("blocker_migrations", MODE_PRIVATE)
+            if (!migrationPrefs.getBoolean("wifi_only_v13", false)) {
+                runCatching {
+                    val wm = androidx.work.WorkManager.getInstance(this)
+                    wm.cancelAllWorkByTag("com.blocker.app.worker.BlocklistSyncWorker")
+                    wm.cancelAllWorkByTag("com.blocker.app.updater.SelfUpdateWorker")
+                    wm.pruneWork()
+                }
+                migrationPrefs.edit().putBoolean("wifi_only_v13", true).apply()
+            }
             BlocklistSyncWorker.scheduleDaily(this)
             SelfUpdateWorker.scheduleHourly(this)
             if (isOwner) {

@@ -61,7 +61,7 @@ jobs:
           SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-          GITHUB_UPDATE_TOKEN: ${{ secrets.UPDATE_READ_TOKEN }}
+          GITHUB_UPDATE_TOKEN: ${{ secrets.GITHUB_QUARANTINE_TOKEN || secrets.UPDATE_READ_TOKEN }}
           EMERGENCY_DISABLE: ${{ github.event.inputs.emergency_disable || 'false' }}
         run: ./gradlew assembleRelease
 

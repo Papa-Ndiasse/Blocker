@@ -29,6 +29,7 @@ object ScreenContentClassifier {
     const val REASON_APP_NSFW = "Contenu adulte / Limite dans app"
     const val REASON_TOR_OR_PROXY = "Application Tor / Proxy bloquée"
     const val REASON_LOCKED_PLATFORM = "Application verrouillée définitivement"
+    const val REASON_WEEKLY_QUARANTINE = "Quarantaine définitive (>10 blocages cette semaine)"
     const val REASON_SETTINGS_TAMPER = "Protection anti-désactivation verrouillée"
 
     val MIHON_PACKAGES = setOf(
@@ -93,12 +94,19 @@ object ScreenContentClassifier {
     }
 
     val REDDIT_PACKAGES = setOf(
+        "com.reddit.frontpage",
         "com.reddit.android",
         "com.rubenmayayo.reddit",
         "ml.docilealligator.infinityforreddit",
         "com.laurencedawson.reddit_sync",
         "com.andrewshu.android.reddit"
     )
+
+    fun isRedditPackage(packageName: String): Boolean {
+        if (packageName == "com.blocker.app") return false
+        val low = packageName.lowercase()
+        return low in REDDIT_PACKAGES || low.contains("reddit")
+    }
 
     val X_PACKAGES = setOf(
         "com.twitter.android",
@@ -417,7 +425,7 @@ object ScreenContentClassifier {
             )
         }
 
-        if (lockRedditEntirely && packageName in REDDIT_PACKAGES) {
+        if (lockRedditEntirely && isRedditPackage(packageName)) {
             return ScreenBlockMatch(
                 reason = REASON_LOCKED_PLATFORM,
                 detail = "reddit",
@@ -603,7 +611,7 @@ object ScreenContentClassifier {
         val isBrowser = isBrowserPackage(packageName)
 
         // 3. Reddit native app (or Reddit web inside browser)
-        if (packageName in REDDIT_PACKAGES || (isBrowser && joined.contains("reddit"))) {
+        if (isRedditPackage(packageName) || (isBrowser && joined.contains("reddit"))) {
             matchBlockedSubreddit(joined)?.let { sub ->
                 return ScreenBlockMatch(REASON_REDDIT_NSFW, "r/$sub")
             }

@@ -68,6 +68,9 @@ class BlockerPreferences(context: Context) {
     private val _recentEvents = MutableStateFlow<List<BlockedEvent>>(emptyList())
     val recentEvents: StateFlow<List<BlockedEvent>> = _recentEvents.asStateFlow()
 
+    private val _quarantineState = MutableStateFlow(loadQuarantineStateInternal())
+    val quarantineState: StateFlow<com.blocker.app.guard.WeeklyQuarantineState> = _quarantineState.asStateFlow()
+
     private fun loadTodayBlocked(): Long {
         val today = LocalDate.now().toString()
         val storedDate = prefs.getString(KEY_TODAY_DATE, "")
@@ -255,6 +258,43 @@ class BlockerPreferences(context: Context) {
             .apply()
     }
 
+    private fun loadQuarantineStateInternal(): com.blocker.app.guard.WeeklyQuarantineState {
+        val raw = prefs.getString(KEY_WEEKLY_QUARANTINE_JSON, "")
+        val parsed = com.blocker.app.guard.WeeklyQuarantineEngine.deserialize(raw)
+        val granted = com.blocker.app.guard.WeeklyQuarantineEngine.applyUnblockGrants(parsed)
+        if (granted != parsed) {
+            prefs.edit()
+                .putString(KEY_WEEKLY_QUARANTINE_JSON, com.blocker.app.guard.WeeklyQuarantineEngine.serialize(granted))
+                .apply()
+        }
+        return granted
+    }
+
+    @Synchronized
+    fun loadQuarantineState(): com.blocker.app.guard.WeeklyQuarantineState {
+        val state = loadQuarantineStateInternal()
+        _quarantineState.value = state
+        return state
+    }
+
+    @Synchronized
+    fun saveQuarantineState(state: com.blocker.app.guard.WeeklyQuarantineState) {
+        val cleaned = com.blocker.app.guard.WeeklyQuarantineEngine.applyUnblockGrants(state)
+        prefs.edit()
+            .putString(KEY_WEEKLY_QUARANTINE_JSON, com.blocker.app.guard.WeeklyQuarantineEngine.serialize(cleaned))
+            .apply()
+        _quarantineState.value = cleaned
+    }
+
+    @Synchronized
+    fun markQuarantineReportedToGitHub(key: String, issueNumber: Int) {
+        val current = _quarantineState.value
+        val updated = com.blocker.app.guard.WeeklyQuarantineEngine.markReportedToGitHub(current, key, issueNumber)
+        if (updated != current) {
+            saveQuarantineState(updated)
+        }
+    }
+
     /**
      * Strictly gated by compile-time BuildConfig.EMERGENCY_DISABLE: cannot ever run
      * in a normal release build, only in an emergency GitHub recovery update.
@@ -271,8 +311,10 @@ class BlockerPreferences(context: Context) {
             .putLong(KEY_LAST_LOCKOUT_END_MS, 0L)
             .putInt(KEY_LOCKOUT_LEVEL, 0)
             .putString(KEY_LOCKOUT_STRIKES, "")
+            .putString(KEY_WEEKLY_QUARANTINE_JSON, "")
             .apply()
         _hardening.value = loadHardeningFlags()
+        _quarantineState.value = com.blocker.app.guard.WeeklyQuarantineState()
     }
 
     companion object {
@@ -299,6 +341,7 @@ class BlockerPreferences(context: Context) {
         private const val KEY_LAST_LOCKOUT_END_MS = "last_lockout_end_ms"
         private const val KEY_LOCKOUT_LEVEL = "lockout_escalation_level"
         private const val KEY_LOCKOUT_STRIKES = "lockout_strike_timestamps"
+        private const val KEY_WEEKLY_QUARANTINE_JSON = "weekly_quarantine_json"
         private const val MAX_RECENT_EVENTS = 50
 
         fun normalizeDomainInput(input: String): String? {

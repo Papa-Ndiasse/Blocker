@@ -73,6 +73,9 @@ import com.blocker.app.admin.DeviceOwnerController
 import com.blocker.app.admin.ProtectionStatus
 import com.blocker.app.data.BlockedEvent
 import com.blocker.app.data.HardeningFlags
+import com.blocker.app.guard.QuarantineTargetKind
+import com.blocker.app.guard.WeeklyQuarantineEngine
+import com.blocker.app.guard.WeeklyQuarantineState
 import com.blocker.app.ui.theme.AmberContainer
 import com.blocker.app.ui.theme.AmberWarning
 import com.blocker.app.ui.theme.CrimsonAlert
@@ -107,8 +110,10 @@ fun BlockerRootScreen(
     val customDomains by viewModel.customDomains.collectAsState()
     val hardening by viewModel.hardening.collectAsState()
     val recentEvents by viewModel.recentEvents.collectAsState()
+    val quarantineState by viewModel.quarantineState.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsState()
+    val isSyncingQuarantine by viewModel.isSyncingQuarantine.collectAsState()
     val banner by viewModel.statusBanner.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -162,14 +167,17 @@ fun BlockerRootScreen(
                     lastUpdateCheckMs = lastUpdateCheckMs,
                     hasGithubToken = githubToken.isNotBlank() || BuildConfig.GITHUB_UPDATE_TOKEN.isNotBlank(),
                     recentEvents = recentEvents,
+                    quarantineState = quarantineState,
                     isSyncing = isSyncing,
                     isCheckingUpdate = isCheckingUpdate,
+                    isSyncingQuarantine = isSyncingQuarantine,
                     onRequestDeviceAdmin = onRequestDeviceAdmin,
                     onRequestBatteryUnrestricted = onRequestBatteryUnrestricted,
                     onRefreshStatus = viewModel::refreshStatus,
                     onSealPermanent = viewModel::sealAndEnforceLockdown,
                     onSyncNow = viewModel::syncBlocklistsNow,
                     onCheckUpdateNow = viewModel::checkGitHubUpdateNow,
+                    onSyncQuarantineNow = viewModel::syncQuarantineToGitHubNow,
                     onSaveGithubToken = viewModel::saveGithubToken
                 )
 
@@ -250,14 +258,17 @@ private fun DashboardTab(
     lastUpdateCheckMs: Long,
     hasGithubToken: Boolean,
     recentEvents: List<BlockedEvent>,
+    quarantineState: WeeklyQuarantineState,
     isSyncing: Boolean,
     isCheckingUpdate: Boolean,
+    isSyncingQuarantine: Boolean,
     onRequestDeviceAdmin: () -> Unit,
     onRequestBatteryUnrestricted: () -> Unit,
     onRefreshStatus: () -> Unit,
     onSealPermanent: () -> Unit,
     onSyncNow: () -> Unit,
     onCheckUpdateNow: () -> Unit,
+    onSyncQuarantineNow: () -> Unit,
     onSaveGithubToken: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -301,11 +312,13 @@ private fun DashboardTab(
     if (showTokenDialog) {
         AlertDialog(
             onDismissRequest = { showTokenDialog = false },
-            title = { Text("Token GitHub (dépôt privé)") },
+            title = { Text("Token GitHub (MAJ & Quarantaine)") },
             text = {
                 Column {
                     Text(
-                        "Votre dépôt Papa-Ndiasse/Blocker est privé. Collez un Fine-Grained Token GitHub en lecture seule (Contents: Read-only) pour autoriser les mises à jour automatiques.",
+                        "Collez un Fine-Grained Token GitHub limité au dépôt Papa-Ndiasse/Blocker avec :\n" +
+                            "• Issues : Read and write (pour marquer automatiquement les apps/sites bloqués >10 fois/semaine)\n" +
+                            "• Contents : Read-only (pour les mises à jour automatiques)",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -738,6 +751,171 @@ private fun DashboardTab(
             }
         }
 
+        // 3d. Weekly Quarantine Card (>10 blocks in 7 days -> permanent block + GitHub Issue, update-only unblock)
+        item(key = "weekly_quarantine") {
+            val quarantinedList = remember(quarantineState) {
+                quarantineState.quarantined.values.sortedByDescending { it.quarantinedAtMs }
+            }
+            val activeWarnings = remember(quarantineState) {
+                val cutoff = System.currentTimeMillis() - WeeklyQuarantineEngine.WEEK_WINDOW_MS
+                quarantineState.weeklyStrikesByKey.entries
+                    .map { (k, list) -> k to list.count { it >= cutoff } }
+                    .filter { it.second > 0 }
+                    .sortedByDescending { it.second }
+            }
+            val hasUnreported = quarantinedList.any { !it.reportedToGitHub }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Block,
+                            contentDescription = null,
+                            tint = if (quarantinedList.isNotEmpty()) CrimsonAlert else EmeraldPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Quarantaine hebdo (>10 blocages / 7 j)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Bloqué complètement + marqué sur GitHub. Déblocage uniquement par mise à jour.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    if (quarantinedList.isEmpty() && activeWarnings.isEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Aucune app ni site en quarantaine cette semaine.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    } else {
+                        if (quarantinedList.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            for (entry in quarantinedList) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = CrimsonAlert,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        val kindLabel = if (entry.kind == QuarantineTargetKind.APP) "App" else "Site"
+                                        Text(
+                                            text = "$kindLabel : ${entry.displayName}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = if (entry.reportedToGitHub) {
+                                                "Marqué sur GitHub (#${entry.githubIssueNumber}) • ${entry.weeklyBlockCount} blocages"
+                                            } else {
+                                                "En attente synchro GitHub (Wi-Fi) • ${entry.weeklyBlockCount} blocages"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (entry.reportedToGitHub) EmeraldPrimary else AmberWarning
+                                        )
+                                    }
+                                    Text(
+                                        text = "BLOQUÉ",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = CrimsonAlert,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        if (activeWarnings.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = SurfaceVariantDark)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Compteur semaine en cours :",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            for ((key, count) in activeWarnings.take(6)) {
+                                val label = key.substringAfter(':')
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "$count / ${WeeklyQuarantineEngine.MAX_BLOCKS_BEFORE_QUARANTINE}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (count >= 8) AmberWarning else TextSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        if (hasUnreported) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    if (hasGithubToken) {
+                                        onSyncQuarantineNow()
+                                    } else {
+                                        showTokenDialog = true
+                                    }
+                                },
+                                enabled = !isSyncingQuarantine,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isSyncingQuarantine) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = if (hasGithubToken) {
+                                        "Marquer sur GitHub maintenant"
+                                    } else {
+                                        "Configurer token GitHub (marquage auto)"
+                                    },
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. Protection Layers Checklist
         item(key = "checklist") {
             Card(
@@ -766,6 +944,7 @@ private fun DashboardTab(
                     ProtectionCheckRow("Extensions Keiyoushi / Mihon 18+ & Comick", status.isAccessibilityGuardEnabled || status.isDeviceOwner)
                     ProtectionCheckRow("Batterie illimitée (Anti-Veille Profonde Samsung)", status.isBatteryOptimizationIgnored)
                     ProtectionCheckRow("Pause forcée (3 blocages / 10 min → 5 → 10 → 20 → 40 → 60 min)", status.isAccessibilityGuardEnabled)
+                    ProtectionCheckRow("Quarantaine hebdo (>10 blocages / 7 j → blocage total + GitHub)", status.isAccessibilityGuardEnabled)
                     ProtectionCheckRow("Immunité totale : poseidon-scan.net & Discord", true)
                     ProtectionCheckRow("Anti-Mode Sans Échec & Multi-Utilisateurs", status.isSafeBootLocked && status.isMultiUserLocked)
                     ProtectionCheckRow(

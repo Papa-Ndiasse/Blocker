@@ -15,6 +15,7 @@ import com.blocker.app.BuildConfig
 import com.blocker.app.filter.FilterDecision
 import com.blocker.app.ui.BlockedActivity
 import com.blocker.app.ui.LockoutActivity
+import com.blocker.app.updater.QuarantineReportWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -108,7 +109,23 @@ class BlockerAccessibilityService : AccessibilityService() {
         val isSealed = flags.sealPermanentProtection
         val lockMixedMihon = flags.lockMihonMixedExtensions
 
-        // 0b. Instant 0ms block on launching Tor, proxy browsers, Secure Folder (if latched), or locked Reddit/X
+        // 0b. Instant 0ms block on permanently quarantined apps (>10 blocks within the same week)
+        val quarantineState = app.preferences.quarantineState.value
+        val quarantinedApp = WeeklyQuarantineEngine.findQuarantinedApp(quarantineState, pkg)
+        if (quarantinedApp != null) {
+            triggerBlockOnMain(
+                match = ScreenBlockMatch(
+                    reason = "${ScreenContentClassifier.REASON_WEEKLY_QUARANTINE} : ${quarantinedApp.displayName} — déblocage uniquement par mise à jour Blocker",
+                    detail = quarantinedApp.key,
+                    goHomeImmediately = true
+                ),
+                sourcePackage = pkg,
+                detectedSiteHost = null
+            )
+            return
+        }
+
+        // 0c. Instant 0ms block on launching Tor, proxy browsers, Secure Folder (if latched), or locked Reddit/X
         val launchMatch = ScreenContentClassifier.classifyLaunchedPackage(
             packageName = pkg,
             lockRedditEntirely = flags.lockRedditEntirely,
@@ -116,13 +133,13 @@ class BlockerAccessibilityService : AccessibilityService() {
             lockSamsungSecureFolder = flags.lockSamsungSecureFolder
         )
         if (launchMatch != null) {
-            triggerBlockOnMain(launchMatch, pkg)
+            triggerBlockOnMain(launchMatch, pkg, null)
             return
         }
 
         val isBrowser = ScreenContentClassifier.isBrowserPackage(pkg)
         val isMihon = ScreenContentClassifier.isMihonPackage(pkg)
-        val isRedditOrX = pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
+        val isRedditOrX = ScreenContentClassifier.isRedditPackage(pkg) ||
             pkg in ScreenContentClassifier.X_PACKAGES
         val isStoreOrInstaller = pkg in ScreenContentClassifier.STORE_AND_INSTALLER_PACKAGES ||
             pkg.contains("packageinstaller")
@@ -202,8 +219,9 @@ class BlockerAccessibilityService : AccessibilityService() {
                     textSamples = textSamples
                 )
                 if (match != null) {
+                    val detectedSiteHost = resolveDetectedSiteHost(isBrowser, urlText, match)
                     lastSnapshotHash = 0L // Force re-check if user returns to same blocked page
-                    mainHandler.post { triggerBlockOnMain(match, pkg) }
+                    mainHandler.post { triggerBlockOnMain(match, pkg, detectedSiteHost) }
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "Off-main classification error: ${t.message}")
@@ -211,6 +229,22 @@ class BlockerAccessibilityService : AccessibilityService() {
                 isClassifying.set(false)
             }
         }
+    }
+
+    private fun resolveDetectedSiteHost(
+        isBrowser: Boolean,
+        urlText: String?,
+        match: ScreenBlockMatch
+    ): String? {
+        if (!isBrowser) return null
+        if (!urlText.isNullOrBlank()) {
+            val fromUrlBar = WeeklyQuarantineEngine.normalizeSiteDomain(urlText)
+                ?: ScreenContentClassifier.extractDomainsFromText(urlText).firstOrNull()
+            if (!fromUrlBar.isNullOrBlank()) return fromUrlBar
+        }
+        val fromDetail = WeeklyQuarantineEngine.normalizeSiteDomain(match.detail)
+        if (!fromDetail.isNullOrBlank()) return fromDetail
+        return null
     }
 
     private fun computeSnapshotHash(pkg: String, urlText: String?, samples: List<String>): Long {
@@ -236,15 +270,31 @@ class BlockerAccessibilityService : AccessibilityService() {
         urlText: String?,
         textSamples: List<String>
     ): ScreenBlockMatch? {
-        // 1. Browser URL bar check (instant domain hash + URL keyword match)
+        val quarantineState = app.preferences.quarantineState.value
+
+        // 1. Browser URL bar check (instant quarantined-site check + domain hash + URL keyword match)
         if (isBrowser && !urlText.isNullOrBlank()) {
             if (ScreenContentClassifier.isImmuneUrl(urlText) ||
                 ScreenContentClassifier.isImmuneText(urlText.lowercase())
             ) {
                 return null
             }
+            WeeklyQuarantineEngine.findQuarantinedSite(quarantineState, urlText)?.let { q ->
+                return ScreenBlockMatch(
+                    reason = "${ScreenContentClassifier.REASON_WEEKLY_QUARANTINE} : ${q.displayName} — déblocage uniquement par mise à jour Blocker",
+                    detail = q.key,
+                    goHomeImmediately = true
+                )
+            }
             for (host in ScreenContentClassifier.extractDomainsFromText(urlText)) {
                 if (ScreenContentClassifier.isImmuneUrl(host)) return null
+                WeeklyQuarantineEngine.findQuarantinedSite(quarantineState, host)?.let { q ->
+                    return ScreenBlockMatch(
+                        reason = "${ScreenContentClassifier.REASON_WEEKLY_QUARANTINE} : ${q.displayName} — déblocage uniquement par mise à jour Blocker",
+                        detail = q.key,
+                        goHomeImmediately = true
+                    )
+                }
                 val decision = app.filterEngine.evaluate(host)
                 if (decision is FilterDecision.Block) {
                     return ScreenBlockMatch(ScreenContentClassifier.REASON_BROWSER_URL, host)
@@ -264,6 +314,13 @@ class BlockerAccessibilityService : AccessibilityService() {
                     if (!sample.contains('.')) continue
                     for (host in ScreenContentClassifier.extractDomainsFromText(sample)) {
                         if (ScreenContentClassifier.isImmuneUrl(host)) continue
+                        WeeklyQuarantineEngine.findQuarantinedSite(quarantineState, host)?.let { q ->
+                            return ScreenBlockMatch(
+                                reason = "${ScreenContentClassifier.REASON_WEEKLY_QUARANTINE} : ${q.displayName} — déblocage uniquement par mise à jour Blocker",
+                                detail = q.key,
+                                goHomeImmediately = true
+                            )
+                        }
                         val decision = app.filterEngine.evaluate(host)
                         if (decision is FilterDecision.Block) {
                             val reason = if (isMihon) {
@@ -350,7 +407,11 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun triggerBlockOnMain(match: ScreenBlockMatch, sourcePackage: String) {
+    private fun triggerBlockOnMain(
+        match: ScreenBlockMatch,
+        sourcePackage: String,
+        detectedSiteHost: String?
+    ) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastTriggerTimeMs < TRIGGER_COOLDOWN_MS) return
         lastTriggerTimeMs = now
@@ -359,21 +420,57 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         val app = application as? BlockerApp
         var triggeredLockout = false
-        if (!match.isSettingsTamper && app != null) {
-            app.preferences.recordBlocked(sourcePackage, match.reason)
+        var displayedReason = match.reason
+        var forceGoHome = match.goHomeImmediately
 
-            // Record strike for progressive lockout: 3 blocks in 10 min -> 5 -> 10 -> 20 -> 40 -> 60 min
+        if (!match.isSettingsTamper && app != null) {
+            val nowWall = System.currentTimeMillis()
+            val logTarget = detectedSiteHost ?: sourcePackage
+            app.preferences.recordBlocked(logTarget, match.reason)
+
+            // 1. Progressive phone lockout: 3 blocks in 10 min -> 5 -> 10 -> 20 -> 40 -> 60 min (within 1h)
             val currentLockout = app.preferences.loadLockoutState()
-            val outcome = CooldownLockoutEngine.recordContentBlockStrike(
+            val lockoutOutcome = CooldownLockoutEngine.recordContentBlockStrike(
                 state = currentLockout,
-                nowMs = System.currentTimeMillis()
+                nowMs = nowWall
             )
-            app.preferences.saveLockoutState(outcome.newState)
-            triggeredLockout = outcome.triggeredLockout
+            app.preferences.saveLockoutState(lockoutOutcome.newState)
+            triggeredLockout = lockoutOutcome.triggeredLockout
+
+            // 2. Weekly quarantine: >10 blocks on same app/site in 7 days -> permanent complete block + GitHub Issue
+            if (!match.reason.startsWith(ScreenContentClassifier.REASON_WEEKLY_QUARANTINE)) {
+                val isBrowser = ScreenContentClassifier.isBrowserPackage(sourcePackage)
+                val target = WeeklyQuarantineEngine.resolveTarget(
+                    sourcePackage = sourcePackage,
+                    extractedHost = detectedSiteHost,
+                    isBrowser = isBrowser
+                )
+                if (target != null) {
+                    val currentQuarantine = app.preferences.quarantineState.value
+                    val qOutcome = WeeklyQuarantineEngine.recordBlock(
+                        state = currentQuarantine,
+                        target = target,
+                        reason = match.reason,
+                        nowMs = nowWall
+                    )
+                    app.preferences.saveQuarantineState(qOutcome.newState)
+                    val newlyQuarantined = qOutcome.newlyQuarantined
+                    if (newlyQuarantined != null) {
+                        Log.w(
+                            TAG,
+                            "PERMANENT QUARANTINE triggered for ${newlyQuarantined.key} (${newlyQuarantined.weeklyBlockCount} blocks in 7 days)"
+                        )
+                        forceGoHome = true
+                        displayedReason = "${newlyQuarantined.displayName} a été bloqué plus de 10 fois cette semaine → " +
+                            "bloqué complètement et marqué sur GitHub. Déblocage uniquement par mise à jour Blocker."
+                        QuarantineReportWorker.enqueue(this)
+                    }
+                }
+            }
         }
 
         runCatching {
-            if (triggeredLockout || match.isSettingsTamper || match.goHomeImmediately) {
+            if (triggeredLockout || match.isSettingsTamper || forceGoHome) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
             } else {
                 performGlobalAction(GLOBAL_ACTION_BACK)
@@ -393,7 +490,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                         Intent.FLAG_ACTIVITY_CLEAR_TOP or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP
                 )
-                putExtra(BlockedActivity.EXTRA_REASON, match.reason)
+                putExtra(BlockedActivity.EXTRA_REASON, displayedReason)
             }
             startActivity(blockIntent)
         } catch (e: Exception) {

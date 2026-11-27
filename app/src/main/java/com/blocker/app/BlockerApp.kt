@@ -78,6 +78,9 @@ class BlockerApp : Application() {
             if (preferences.lastSyncEpochMs.value == 0L) {
                 BlocklistSyncWorker.triggerImmediate(this)
             }
+            if (preferences.quarantineState.value.hasUnreportedEntries()) {
+                com.blocker.app.updater.QuarantineReportWorker.enqueue(this)
+            }
         }
 
         // If Device Owner is active, enforce permanent lockdown on app launch

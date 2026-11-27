@@ -8,7 +8,11 @@ import com.blocker.app.admin.DeviceOwnerController
 import com.blocker.app.admin.ProtectionStatus
 import com.blocker.app.data.BlockedEvent
 import com.blocker.app.data.HardeningFlags
+import com.blocker.app.guard.WeeklyQuarantineState
 import com.blocker.app.updater.GitHubAutoUpdater
+import com.blocker.app.updater.GitHubQuarantineReporter
+import com.blocker.app.updater.GitHubQuarantineSyncResult
+import com.blocker.app.updater.QuarantineReportWorker
 import com.blocker.app.updater.UpdateCheckResult
 import com.blocker.app.vpn.BlockerVpnService
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +38,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as BlockerApp
     private val controller = DeviceOwnerController(application)
     private val updater = GitHubAutoUpdater(application, app.preferences)
+    private val quarantineReporter = GitHubQuarantineReporter(app.preferences)
 
     val vpnRunning: StateFlow<Boolean> = BlockerVpnService.isRunning
     val totalBlocked: StateFlow<Long> = app.preferences.totalBlocked
@@ -45,6 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val customDomains: StateFlow<Set<String>> = app.preferences.customDomains
     val hardening: StateFlow<HardeningFlags> = app.preferences.hardening
     val recentEvents: StateFlow<List<BlockedEvent>> = app.preferences.recentEvents
+    val quarantineState: StateFlow<WeeklyQuarantineState> = app.preferences.quarantineState
 
     private val _protectionStatus = MutableStateFlow(controller.getProtectionStatus())
     val protectionStatus: StateFlow<ProtectionStatus> = _protectionStatus.asStateFlow()
@@ -54,6 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isCheckingUpdate = MutableStateFlow(false)
     val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
+
+    private val _isSyncingQuarantine = MutableStateFlow(false)
+    val isSyncingQuarantine: StateFlow<Boolean> = _isSyncingQuarantine.asStateFlow()
 
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
@@ -199,9 +208,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun syncQuarantineToGitHubNow() {
+        if (_isSyncingQuarantine.value) return
+        viewModelScope.launch {
+            _isSyncingQuarantine.value = true
+            _statusBanner.value = null
+            when (val res = quarantineReporter.reportPendingQuarantines()) {
+                is GitHubQuarantineSyncResult.NothingPending -> {
+                    _statusBanner.value = "Toutes les quarantaines sont déjà marquées sur GitHub."
+                }
+                is GitHubQuarantineSyncResult.MissingToken -> {
+                    _statusBanner.value =
+                        "Configurez un token GitHub (Issues: Read & Write) pour marquer automatiquement sur GitHub."
+                }
+                is GitHubQuarantineSyncResult.Synced -> {
+                    _statusBanner.value = if (res.failedCount == 0) {
+                        "${res.reportedCount} quarantaine(s) marquée(s) sur GitHub."
+                    } else {
+                        "${res.reportedCount} marquée(s), ${res.failedCount} échec(s) (vérifiez le droit Issues: Write du token)."
+                    }
+                }
+                is GitHubQuarantineSyncResult.Error -> {
+                    _statusBanner.value = "Erreur synchro GitHub : ${res.message}"
+                }
+            }
+            _isSyncingQuarantine.value = false
+        }
+    }
+
     fun saveGithubToken(token: String) {
         app.preferences.saveGithubUpdateToken(token)
-        _statusBanner.value = "Token GitHub (lecture seule) enregistré."
+        if (app.preferences.quarantineState.value.hasUnreportedEntries()) {
+            QuarantineReportWorker.enqueue(app)
+        }
+        _statusBanner.value = "Token GitHub enregistré (MAJ + marquage quarantaine sur GitHub)."
     }
 
     fun clearBanner() {

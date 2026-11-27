@@ -87,8 +87,8 @@ class BlockerAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
 
-        // Never inspect SystemUI, One UI Home, or Keyboard
-        if (pkg in IGNORED_SYSTEM_PACKAGES) return
+        // Never inspect SystemUI, One UI Home, Keyboard, or immune everyday apps (Discord, TikTok, Snapchat, Instagram, YouTube, WhatsApp)
+        if (pkg in IGNORED_SYSTEM_PACKAGES || pkg in ScreenContentClassifier.IMMUNE_PACKAGES) return
 
         val app = application as? BlockerApp ?: return
         val flags = app.preferences.hardening.value

@@ -259,11 +259,25 @@ class ScreenContentClassifierTest {
         )
         assertNull(installerPoseidon)
 
-        // Discord app & Discord URLs are 100% immune
+        // Discord, TikTok, Snapchat, Instagram, YouTube & normal French slang comments never false-positive
         assertNull(
             ScreenContentClassifier.classifyAppText(
                 "com.discord",
                 listOf("#nsfw-memes", "18+", "adult content"),
+                isSealed = true
+            )
+        )
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.zhiliaoapp.musically",
+                listOf("Emilietalk", "Oui ça doit être ça #fyp", "elle est trop chaude", "18+"),
+                isSealed = true
+            )
+        )
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.android.chrome",
+                listOf("Actualités France", "Une journée chaude d'été", "escorte policière"),
                 isSealed = true
             )
         )

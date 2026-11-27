@@ -109,13 +109,7 @@ object ScreenContentClassifier {
         "org.telegram.messenger",
         "org.telegram.messenger.web",
         "org.thunderdog.challegram",
-        "com.instagram.android",
-        "com.zhiliaoapp.musically",
-        "com.ss.android.ugc.trill",
-        "com.pinterest",
         "com.tumblr",
-        "com.snapchat.android",
-        "com.google.android.youtube",
         "com.google.android.googlequicksearchbox"
     )
 
@@ -123,7 +117,14 @@ object ScreenContentClassifier {
         "com.discord",
         "com.discord.beta",
         "com.discord.canary",
-        "com.discord.alpha"
+        "com.discord.alpha",
+        "com.zhiliaoapp.musically",
+        "com.ss.android.ugc.trill",
+        "com.snapchat.android",
+        "com.instagram.android",
+        "com.google.android.youtube",
+        "com.pinterest",
+        "com.whatsapp"
     )
 
     val STORE_AND_INSTALLER_PACKAGES = setOf(
@@ -150,6 +151,7 @@ object ScreenContentClassifier {
 
     const val SAMSUNG_SECURE_FOLDER_PKG = "com.samsung.knox.securefolder"
 
+    // Broad explicit regex used ONLY for browser URL bars & search queries (classifyUrl)
     private val EXPLICIT_SEARCH_AND_URL_REGEX = Regex(
         "\\b(" + listOf(
             "porn", "porno", "pornography", "nsfw", "xxx", "xvideos", "xnxx", "pornhub",
@@ -159,23 +161,42 @@ object ScreenContentClassifier {
             "vagina", "penis", "cock", "dick", "blowjob", "handjob", "creampie",
             "bukkake", "gangbang", "threesome", "cumshot", "cumslut", "milf", "gilf",
             "bdsm", "fetish", "erotic", "erotica", "sextape", "sexvideo", "sexvid",
-            "masturbation", "orgasm", "dildo", "vibrator", "slut", "whore", "escort",
-            "gonewild", "realgirls", "celebnsfw", "leakednudes", "fappening", "thirsttrap",
-            "lingerie", "boudoir", "gooning", "fap", "jerkoff", "horny", "hookup",
+            "masturbation", "orgasm", "dildo", "vibrator", "slut", "whore",
+            "gonewild", "realgirls", "celebnsfw", "leakednudes", "fappening",
+            "gooning", "jerkoff", "horny",
             "hentai", "hanime", "nhentai", "doujin", "doujinshi", "rule34", "r34",
             "ecchi", "ahegao", "oppai", "paizuri", "futanari", "yiff", "furryporn",
-            "gelbooru", "danbooru", "e621", "lewd", "waifusgonewild", "animeplot",
+            "gelbooru", "danbooru", "e621", "lewd", "waifusgonewild",
             "manhwa18", "pornhwa", "comick", "r-18", "r18", "eroge", "f95zone", "iwara",
             "sfmcompile", "kemono", "coomer",
             "jav", "missav", "jable", "supjav", "javhd", "javguru", "javdb", "javbus",
             "av01", "avgle", "91porn", "koreanbj", "uncensoredjav", "asiansgonewild",
             "nudify", "undress", "deepnude", "clothoff", "deepfake", "civitai",
             "pornpen", "janitorai", "spicychat", "crushon", "candy\\.ai", "dreamgf",
-            "sexe", "baise", "baiser", "salope", "pute", "branlette",
-            "sodomie", "fellation", "beurette", "plan\\s*cul", "plancul", "cul\\s*nu",
-            "seins\\s*nus", "femme\\s*nue", "fille\\s*nue", "nudité", "érotique",
-            "erotique", "jacquie\\s*et\\s*michel", "dorcel", "tukif", "coquine",
-            "chaude", "libertin", "libertine", "échangiste", "echangiste"
+            "sexe", "branlette", "sodomie", "fellation", "beurette",
+            "plan\\s*cul", "plancul", "cul\\s*nu", "seins\\s*nus", "femme\\s*nue",
+            "fille\\s*nue", "nudité", "érotique", "erotique",
+            "jacquie\\s*et\\s*michel", "dorcel", "tukif"
+        ).joinToString("|") + ")\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Strict unambiguous NSFW/porn/hentai/JAV/AI/Comick regex for on-screen text scanning
+    // (excludes everyday French/English slang & insults that cause false positives in comments/chats)
+    private val STRICT_ONSCREEN_NSFW_REGEX = Regex(
+        "\\b(" + listOf(
+            "porn", "porno", "pornography", "xvideos", "xnxx", "pornhub",
+            "xhamster", "redtube", "youporn", "spankbang", "eporner", "chaturbate",
+            "stripchat", "bongacams", "onlyfans", "fansly", "mym\\.fans", "camgirl",
+            "blowjob", "handjob", "creampie", "bukkake", "gangbang", "cumshot", "cumslut",
+            "sextape", "sexvideo", "sexvid", "leakednudes", "celebnsfw", "gonewild",
+            "hentai", "hanime", "nhentai", "doujinshi", "rule34", "r34",
+            "ahegao", "paizuri", "futanari", "furryporn", "gelbooru", "danbooru", "e621",
+            "manhwa18", "pornhwa", "comick", "eroge", "f95zone", "sfmcompile",
+            "missav", "jable", "supjav", "javhd", "javguru", "javdb", "javbus",
+            "av01", "avgle", "91porn", "koreanbj", "uncensoredjav", "asiansgonewild",
+            "nudify", "deepnude", "clothoff", "pornpen", "spicychat", "candy\\.ai", "dreamgf",
+            "jacquie\\s*et\\s*michel", "dorcel", "tukif", "plan\\s*cul", "plancul"
         ).joinToString("|") + ")\\b",
         RegexOption.IGNORE_CASE
     )
@@ -514,7 +535,7 @@ object ScreenContentClassifier {
             matchIndicatorsFast(joined, REDDIT_PHRASE_INDICATORS, REDDIT_WORD_REGEX)?.let { hit ->
                 return ScreenBlockMatch(REASON_REDDIT_NSFW, hit)
             }
-            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
             if (explicitMatch != null) {
                 return ScreenBlockMatch(REASON_REDDIT_NSFW, explicitMatch.value)
             }
@@ -527,7 +548,7 @@ object ScreenContentClassifier {
                     return ScreenBlockMatch(REASON_X_NSFW, indicator)
                 }
             }
-            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
             if (explicitMatch != null) {
                 return ScreenBlockMatch(REASON_X_NSFW, explicitMatch.value)
             }
@@ -547,31 +568,28 @@ object ScreenContentClassifier {
             matchIndicatorsFast(joined, MIHON_PHRASE_INDICATORS, MIHON_WORD_REGEX)?.let { hit ->
                 return ScreenBlockMatch(REASON_MIHON_NSFW, hit)
             }
-            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
             if (explicitMatch != null) {
                 return ScreenBlockMatch(REASON_MIHON_NSFW, explicitMatch.value)
             }
         }
 
-        // 6. General Browser Page Guard (catches adult/hentai/JAV/Comick sites even when the browser
-        //    hides the URL bar while scrolling or uses a custom toolbar ID)
+        // 6. General Browser Page Guard (catches unambiguous adult/hentai/JAV/Comick sites even when
+        //    the browser hides the URL bar while scrolling, without false positives on normal pages)
         if (isBrowser) {
             if (isImmuneText(joined)) {
                 return null
             }
-            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
             if (explicitMatch != null) {
                 return ScreenBlockMatch(REASON_BROWSER_URL, explicitMatch.value)
             }
         }
 
-        // 7. Other monitored social/messaging/search apps
+        // 7. Telegram / Tumblr / Google Search (strict unambiguous adult content only)
         if (packageName in SOCIAL_MONITORED_PACKAGES) {
             if (isImmuneText(joined)) return null
-            matchIndicatorsFast(joined, SOCIAL_PHRASE_INDICATORS, SOCIAL_WORD_REGEX)?.let { hit ->
-                return ScreenBlockMatch(REASON_APP_NSFW, hit)
-            }
-            val explicitMatch = EXPLICIT_SEARCH_AND_URL_REGEX.find(joined)
+            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
             if (explicitMatch != null) {
                 return ScreenBlockMatch(REASON_APP_NSFW, explicitMatch.value)
             }

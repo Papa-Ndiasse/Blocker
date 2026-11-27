@@ -283,5 +283,43 @@ class ScreenContentClassifierTest {
         )
         assertNull(ScreenContentClassifier.classifyUrl("https://discord.com/channels/12345/nsfw"))
         assertNull(ScreenContentClassifier.classifyUrl("https://discord.gg/nsfw123"))
+
+        // Reddit borderline subreddits & French 18+ warnings must be caught
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("r/frenchgonewild", "Rejoindre"),
+                isSealed = true
+            )
+        )
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("r/kpopfap", "Top posts"),
+                isSealed = true
+            )
+        )
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("Communauté 18+", "Oui, j'ai plus de 18 ans"),
+                isSealed = true
+            )
+        )
+        // SFW photography subreddits like r/FoodPorn and r/EarthPorn must NOT false-positive
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("r/FoodPorn", "Homemade ramen bowl", "1.2k upvotes"),
+                isSealed = true
+            )
+        )
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.reddit.android",
+                listOf("r/EarthPorn", "Sunrise over Mont Blanc", "4.5k upvotes"),
+                isSealed = true
+            )
+        )
     }
 }

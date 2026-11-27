@@ -201,20 +201,79 @@ object ScreenContentClassifier {
         RegexOption.IGNORE_CASE
     )
 
+    // Dedicated strict+borderline regex specifically for Reddit & X/Twitter (where borderline & NSFW posts must never show)
+    private val REDDIT_X_BORDERLINE_REGEX = Regex(
+        "\\b(" + listOf(
+            "nsfw", "18\\+", "over\\s*18", "r-18", "r18",
+            "porn", "porno", "pornography", "xxx", "xvideos", "xnxx", "pornhub",
+            "xhamster", "redtube", "youporn", "spankbang", "eporner", "chaturbate",
+            "stripchat", "bongacams", "onlyfans", "fansly", "mym\\.fans", "camgirl", "redgifs",
+            "nude", "nudes", "nudity", "naked", "boobs", "boobies", "tits", "titties", "pussy",
+            "vagina", "penis", "blowjob", "handjob", "creampie", "bukkake", "gangbang",
+            "cumshot", "cumslut", "milf", "gilf", "bdsm", "fetish", "erotic", "erotica",
+            "sextape", "sexvideo", "sexvid", "masturbation", "orgasm", "dildo", "vibrator",
+            "gonewild", "realgirls", "celebnsfw", "leakednudes", "fappening", "thirsttrap",
+            "lingerie", "boudoir", "gooning", "fap", "jerkoff", "horny", "upskirt", "cleavage",
+            "nipples", "areolas", "pokies", "bikini\\s*haul", "try\\s*on\\s*haul",
+            "hentai", "hanime", "nhentai", "doujin", "doujinshi", "rule34", "r34",
+            "ecchi", "ahegao", "oppai", "paizuri", "futanari", "yiff", "furryporn",
+            "gelbooru", "danbooru", "e621", "lewd", "waifusgonewild", "animeplot",
+            "manhwa18", "pornhwa", "comick", "eroge", "f95zone", "iwara", "sfmcompile",
+            "kemono", "coomer", "jav", "gravure", "missav", "jable", "supjav", "javhd",
+            "av01", "avgle", "91porn", "koreanbj", "uncensoredjav", "asiansgonewild",
+            "nudify", "undress", "deepnude", "clothoff", "deepfake", "civitai",
+            "pornpen", "janitorai", "spicychat", "crushon", "candy\\.ai", "dreamgf",
+            "branlette", "sodomie", "fellation", "beurette", "plan\\s*cul", "plancul",
+            "cul\\s*nu", "seins\\s*nus", "femme\\s*nue", "fille\\s*nue", "nudité",
+            "érotique", "erotique", "jacquie\\s*et\\s*michel", "dorcel", "tukif"
+        ).joinToString("|") + ")\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Catches tens of thousands of NSFW & borderline subreddits by r/<name> pattern
+    // while explicitly allowing SFW photography/hobby subs like r/EarthPorn, r/FoodPorn, etc.
+    private val REDDIT_SUBREDDIT_REGEX = Regex(
+        "\\br/([a-z0-9_]{2,40})\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val SFW_REDDIT_SUBREDDITS = setOf(
+        "earthporn", "foodporn", "cityporn", "spaceporn", "architectureporn",
+        "designporn", "mapporn", "cableporn", "powerwashingporn", "abandonedporn",
+        "historyporn", "natureporn", "carporn", "roomporn", "waterporn", "skyporn",
+        "botanicalporn", "villageporn", "bridgeporn", "bookporn", "artporn",
+        "machineporn", "toolporn", "movieposterporn", "exposureporn", "winterporn",
+        "desertporn", "geologyporn", "weatherporn", "fireporn", "adrenalineporn",
+        "animalporn", "humanporn", "quoteporn", "soundporn", "musicporn"
+    )
+
+    private val REDDIT_SUBREDDIT_BLOCKED_STEMS = Regex(
+        "(nsfw|porn|hentai|ecchi|lewd|nude|nudity|gonewild|boob|tit|tidd|ass|butt|booty|" +
+            "pussy|cock|dick|cum|slut|whore|milf|gilf|bdsm|fetish|kink|erotic|fap|goon|" +
+            "jerk|horny|onlyfans|fansly|jav|gravure|bikini|lingerie|cleavage|upskirt|" +
+            "nipple|areola|pokies|thigh|yogapants|leggings|sundress|tightdress|busty|" +
+            "pawg|thick|curvy|stacked|r34|rule34|booru|doujin|yiff|furry|pornhwa|" +
+            "manhwa18|xxx|18plus|over18|sexe|baise|beurette|coquine|thot|hottie|babes|" +
+            "sexy|hotgirls|realgirls|fitgirls|cosplaygirls|cosplaybutts|kpopfap|jpopfap|" +
+            "waifu|oppai|ahegao|futanari|creampie|blowjob|anal|bondage|bimbo|sissy|" +
+            "femboy|bbw|redgifs|nudism|naturism|exhibition|voyeur|cuckold|swingers|" +
+            "celeb|fappening|instahotties|igmodels|modelsgonewild|ohlympics|holdthemoan|" +
+            "legalteens|barelylegal|breeding|dirtyr4r|gothsluts|girlsfinish)",
+        RegexOption.IGNORE_CASE
+    )
+
     private val REDDIT_NSFW_INDICATORS = listOf(
-        "nsfw", "18+", "over 18", "over18", "include_over_18",
-        "plus de 18 ans", "contenu pour adultes", "contenu réservé aux adultes",
-        "contenu mature", "mature content", "adult content",
-        "confirm you're over 18", "you must be 18+", "show mature content",
+        "nsfw", "18+", "over 18", "over18", "include_over_18", "not safe for work",
+        "plus de 18 ans", "j'ai plus de 18 ans", "confirmez que vous avez plus de 18",
+        "contenu pour adultes", "contenu réservé aux adultes", "réservé aux adultes",
+        "communauté 18+", "communauté pour adultes", "communauté réservée aux adultes",
+        "profil 18+", "profil pour adultes", "publication 18+", "contenu 18+",
+        "contenu mature", "mature content", "adult content", "nsfw content",
+        "this community is 18+", "this profile is 18+", "marked as nsfw", "view nsfw",
+        "confirm you're over 18", "you must be 18+", "yes, i'm over 18", "show mature content",
         "afficher le contenu pour adultes", "afficher le contenu mature",
         "afficher le contenu nsfw", "blur mature", "blur nsfw", "flouter les images",
-        "r/gonewild", "r/realgirls", "r/nsfw", "r/hentai", "r/rule34", "r/ecchi",
-        "r/onlyfans", "r/asiansgonewild", "r/celebnsfw", "r/gentlemanboners",
-        "r/cosplaygirls", "r/cosplaybutts", "r/thighdeology", "r/bikini",
-        "r/lingerie", "r/thick", "r/pawg", "r/petitegonewild", "r/bustypetite",
-        "r/legalteens", "r/collegesluts", "r/breedingmaterial", "r/dirtyr4r",
-        "r/lewd", "r/porn", "r/boobs", "r/milf", "r/bdsm", "r/erotica",
-        "r/jav", "r/nudes", "r/fap", "r/cum", "r/ass"
+        "flouter les médias", "safe search"
     )
 
     private val X_SENSITIVE_INDICATORS = listOf(
@@ -226,7 +285,7 @@ object ScreenContentClassifier {
         "display media that may contain sensitive",
         "afficher les médias pouvant contenir",
         "mark media you post as having material",
-        "adult content",
+        "adult content", "nudity or sexual content", "nudité ou contenu sexuel",
         "#nsfw", "#18+", "#onlyfans", "#fansly", "#mym", "#hentai", "#r34",
         "#rule34", "#ecchi", "#lewd", "#jav", "#nude", "#nudes", "#porn",
         "#porno", "#xxx", "#sextape", "#camgirl", "#erotic", "#bdsm",
@@ -387,6 +446,9 @@ object ScreenContentClassifier {
         }
 
         if (host.contains("reddit.com") || host.contains("redd.it")) {
+            matchBlockedSubreddit(decoded)?.let { sub ->
+                return ScreenBlockMatch(REASON_REDDIT_NSFW, "r/$sub")
+            }
             for (indicator in REDDIT_NSFW_INDICATORS) {
                 if (decoded.contains(indicator)) {
                     return ScreenBlockMatch(REASON_REDDIT_NSFW, indicator)
@@ -532,12 +594,15 @@ object ScreenContentClassifier {
 
         // 3. Reddit native app (or Reddit web inside browser)
         if (packageName in REDDIT_PACKAGES || (isBrowser && joined.contains("reddit"))) {
+            matchBlockedSubreddit(joined)?.let { sub ->
+                return ScreenBlockMatch(REASON_REDDIT_NSFW, "r/$sub")
+            }
             matchIndicatorsFast(joined, REDDIT_PHRASE_INDICATORS, REDDIT_WORD_REGEX)?.let { hit ->
                 return ScreenBlockMatch(REASON_REDDIT_NSFW, hit)
             }
-            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
-            if (explicitMatch != null) {
-                return ScreenBlockMatch(REASON_REDDIT_NSFW, explicitMatch.value)
+            val borderlineMatch = REDDIT_X_BORDERLINE_REGEX.find(joined)
+            if (borderlineMatch != null) {
+                return ScreenBlockMatch(REASON_REDDIT_NSFW, borderlineMatch.value)
             }
         }
 
@@ -548,9 +613,9 @@ object ScreenContentClassifier {
                     return ScreenBlockMatch(REASON_X_NSFW, indicator)
                 }
             }
-            val explicitMatch = STRICT_ONSCREEN_NSFW_REGEX.find(joined)
-            if (explicitMatch != null) {
-                return ScreenBlockMatch(REASON_X_NSFW, explicitMatch.value)
+            val borderlineMatch = REDDIT_X_BORDERLINE_REGEX.find(joined)
+            if (borderlineMatch != null) {
+                return ScreenBlockMatch(REASON_X_NSFW, borderlineMatch.value)
             }
         }
 
@@ -687,6 +752,17 @@ object ScreenContentClassifier {
         "apk", "png", "jpg", "jpeg", "gif", "webp", "svg", "mp4", "mp3", "mkv",
         "pdf", "zip", "rar", "7z", "txt", "json", "xml", "html", "htm", "css", "js", "php"
     )
+
+    private fun matchBlockedSubreddit(text: String): String? {
+        for (m in REDDIT_SUBREDDIT_REGEX.findAll(text)) {
+            val sub = m.groupValues[1].lowercase()
+            if (sub in SFW_REDDIT_SUBREDDITS) continue
+            if (REDDIT_SUBREDDIT_BLOCKED_STEMS.containsMatchIn(sub)) {
+                return sub
+            }
+        }
+        return null
+    }
 
     private fun isPhraseIndicator(s: String): Boolean =
         s.contains(' ') || s.contains('/') || s.contains('#') || s.contains('+') || s.contains('.')

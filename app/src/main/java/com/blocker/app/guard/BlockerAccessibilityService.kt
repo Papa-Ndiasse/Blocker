@@ -126,11 +126,15 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (!shouldInspect) return
 
         // Backpressure: if previous background classification is still running, drop this frame cleanly
+        val isHighRiskFeed = pkg in ScreenContentClassifier.REDDIT_PACKAGES ||
+            pkg in ScreenContentClassifier.X_PACKAGES ||
+            isMihon
+        val debounceMs = if (isHighRiskFeed) FEED_SCAN_DEBOUNCE_MS else CONTENT_SCAN_DEBOUNCE_MS
         val eventType = event.eventType
         val nowElapsed = SystemClock.elapsedRealtime()
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             pkg == lastScannedPkg &&
-            nowElapsed - lastContentScanElapsedMs < CONTENT_SCAN_DEBOUNCE_MS
+            nowElapsed - lastContentScanElapsedMs < debounceMs
         ) {
             return
         }
@@ -141,7 +145,8 @@ class BlockerAccessibilityService : AccessibilityService() {
         lastScannedPkg = pkg
         lastContentScanElapsedMs = nowElapsed
 
-        // Fast, bounded snapshot on main thread (<1.5ms): at most 1 URL-bar lookup + 50 BFS text nodes
+        // Fast, bounded snapshot on main thread: 120 nodes on Reddit/X/Mihon (to reach feed posts & 18+ pills
+        // past top chrome), 55 nodes on other apps.
         val root = try {
             rootInActiveWindow
         } catch (_: Throwable) {
@@ -153,8 +158,9 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
 
         val urlText = if (isBrowser) extractSingleBrowserUrl(root, pkg) else null
-        val textSamples = ArrayList<String>(40)
-        collectNodeTextBfs(root, textSamples, maxNodes = MAX_INSPECTED_NODES)
+        val maxNodes = if (isHighRiskFeed) MAX_FEED_INSPECTED_NODES else MAX_INSPECTED_NODES
+        val textSamples = ArrayList<String>(maxNodes)
+        collectNodeTextBfs(root, textSamples, maxNodes = maxNodes)
 
         // 64-bit snapshot fingerprint dedup: skips ~85% of redundant ticks when screen text didn't change
         val snapshotHash = computeSnapshotHash(pkg, urlText, textSamples)
@@ -410,7 +416,9 @@ class BlockerAccessibilityService : AccessibilityService() {
         private const val TAG = "BlockerA11yGuard"
         private const val TRIGGER_COOLDOWN_MS = 1000L
         private const val CONTENT_SCAN_DEBOUNCE_MS = 450L
-        private const val MAX_INSPECTED_NODES = 50
+        private const val FEED_SCAN_DEBOUNCE_MS = 220L
+        private const val MAX_INSPECTED_NODES = 55
+        private const val MAX_FEED_INSPECTED_NODES = 120
         private const val KEIYOUSHI_NSFW_NAMES_ASSET = "keiyoushi_nsfw_names.txt"
         private const val KEIYOUSHI_MIXED_NAMES_ASSET = "keiyoushi_mixed_names.txt"
 

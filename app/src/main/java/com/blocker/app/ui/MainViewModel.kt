@@ -64,6 +64,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSyncingQuarantine = MutableStateFlow(false)
     val isSyncingQuarantine: StateFlow<Boolean> = _isSyncingQuarantine.asStateFlow()
 
+    private val _installedTorPackages = MutableStateFlow(scanInstalledTorPackages())
+    val installedTorPackages: StateFlow<List<String>> = _installedTorPackages.asStateFlow()
+
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
@@ -78,6 +81,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             controller.enforcePermanentLockdown()
             _protectionStatus.value = controller.getProtectionStatus()
         }
+        _installedTorPackages.value = scanInstalledTorPackages()
+    }
+
+    fun uninstallTorPackage(packageName: String) {
+        if (controller.isDeviceOwner()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                controller.purgeSingleTorPackage(packageName)
+                _installedTorPackages.value = scanInstalledTorPackages()
+                _statusBanner.value = "Désinstallation silencieuse de $packageName lancée."
+            }
+        } else {
+            com.blocker.app.admin.PackageInstallReceiver.requestUninstallPackage(app, packageName)
+        }
+    }
+
+    private fun scanInstalledTorPackages(): List<String> {
+        val pm = app.packageManager
+        val found = ArrayList<String>()
+        for (pkg in com.blocker.app.admin.TorAppPolicy.TOR_EXACT_PACKAGES) {
+            val installed = runCatching {
+                pm.getPackageInfo(pkg, 0)
+                true
+            }.getOrDefault(false)
+            if (installed) found.add(pkg)
+        }
+        return found
     }
 
     fun sealAndEnforceLockdown() {

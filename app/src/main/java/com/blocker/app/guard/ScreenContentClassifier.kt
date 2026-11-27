@@ -529,6 +529,15 @@ object ScreenContentClassifier {
                 )
             }
 
+            // Allow Android's PackageInstaller uninstall dialog for any app OTHER than Blocker
+            // (so uninstalling Tor, Orbot, or NSFW extensions is never blocked!)
+            if (packageName.contains("packageinstaller") &&
+                !joined.contains("blocker") &&
+                (joined.contains("désinstaller") || joined.contains("uninstall"))
+            ) {
+                return null
+            }
+
             // Total immunity for Poseidon Scan extension installation
             if (isImmuneText(joined)) {
                 return null

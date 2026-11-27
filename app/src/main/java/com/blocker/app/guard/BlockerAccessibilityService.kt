@@ -3,6 +3,8 @@ package com.blocker.app.guard
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -12,6 +14,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.blocker.app.BlockerApp
 import com.blocker.app.BuildConfig
+import com.blocker.app.admin.DeviceOwnerController
+import com.blocker.app.admin.PackageInstallReceiver
+import com.blocker.app.admin.TorAppPolicy
 import com.blocker.app.filter.FilterDecision
 import com.blocker.app.ui.BlockedActivity
 import com.blocker.app.ui.LockoutActivity
@@ -32,6 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Ultra-lightweight, zero-ANR On-Screen & In-App Content Guard for Samsung Galaxy A55 / One UI:
  *   - Enforces progressive phone lockout (3 blocks in 10 min -> 5 -> 10 -> 20 -> 40 -> 60 min within same hour)
+ *   - Enforces weekly quarantine (>10 blocks/7d -> permanent lock + GitHub Issue, update-only unblock)
+ *   - Dynamically watches new package installs to auto-uninstall Tor (silent if Device Owner, instant uninstall prompt in No-PC mode)
  *   - Captures graphical/icon-only Reddit & X NSFW/18+ badges via viewIdResourceName (0 extra Binder calls)
  *   - 180-node BFS on Reddit/X/Mihon feeds + 220ms responsiveness; 55-node BFS on other monitored apps
  *   - ALL regex/domain/hash classification runs OFF the Main Thread with AtomicBoolean backpressure
@@ -43,8 +50,10 @@ class BlockerAccessibilityService : AccessibilityService() {
     private val guardScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isClassifying = AtomicBoolean(false)
+    private var packageInstallReceiver: PackageInstallReceiver? = null
 
     private var lastTriggerTimeMs: Long = 0L
+    private var lastTorUninstallPromptElapsedMs: Long = 0L
     private var lastLockoutLaunchElapsedMs: Long = 0L
     private var lastContentScanElapsedMs: Long = 0L
     private var lastScannedPkg: String = ""
@@ -68,12 +77,40 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
 
         _isRunning.value = true
-        Log.i(TAG, "BlockerAccessibilityService connected (A55 One UI + progressive lockout)")
+        registerPackageInstallWatcher()
+        Log.i(TAG, "BlockerAccessibilityService connected (A55 One UI + progressive lockout + Tor watcher)")
 
         guardScope.launch {
             keiyoushiNsfwNames = loadNameAsset(KEIYOUSHI_NSFW_NAMES_ASSET)
             keiyoushiMixedNames = loadNameAsset(KEIYOUSHI_MIXED_NAMES_ASSET)
             runCatching { (application as? BlockerApp)?.ensureFilterEngineLoaded() }
+            runCatching {
+                val controller = DeviceOwnerController(this@BlockerAccessibilityService)
+                if (controller.isDeviceOwner()) {
+                    controller.purgeTorApps()
+                }
+            }
+        }
+    }
+
+    private fun registerPackageInstallWatcher() {
+        if (packageInstallReceiver != null) return
+        val receiver = PackageInstallReceiver()
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(receiver, filter)
+            }
+            packageInstallReceiver = receiver
+        }.onFailure { e ->
+            Log.w(TAG, "Could not register PackageInstallReceiver: ${e.message}")
         }
     }
 
@@ -133,6 +170,23 @@ class BlockerAccessibilityService : AccessibilityService() {
             lockSamsungSecureFolder = flags.lockSamsungSecureFolder
         )
         if (launchMatch != null) {
+            if (TorAppPolicy.isTorPackage(pkg)) {
+                val controller = DeviceOwnerController(this)
+                if (controller.isDeviceOwner()) {
+                    guardScope.launch { runCatching { controller.purgeSingleTorPackage(pkg) } }
+                    triggerBlockOnMain(launchMatch, pkg, null)
+                } else {
+                    val nowElapsed = SystemClock.elapsedRealtime()
+                    if (nowElapsed - lastTorUninstallPromptElapsedMs >= 2_500L) {
+                        lastTorUninstallPromptElapsedMs = nowElapsed
+                        runCatching { performGlobalAction(GLOBAL_ACTION_HOME) }
+                        PackageInstallReceiver.requestUninstallPackage(this, pkg)
+                    } else {
+                        triggerBlockOnMain(launchMatch, pkg, null)
+                    }
+                }
+                return
+            }
             triggerBlockOnMain(launchMatch, pkg, null)
             return
         }
@@ -364,6 +418,10 @@ class BlockerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         _isRunning.value = false
         activeInstance = null
+        packageInstallReceiver?.let { receiver ->
+            runCatching { unregisterReceiver(receiver) }
+        }
+        packageInstallReceiver = null
         guardScope.cancel()
         super.onDestroy()
     }

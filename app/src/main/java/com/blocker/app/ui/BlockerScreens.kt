@@ -111,6 +111,7 @@ fun BlockerRootScreen(
     val hardening by viewModel.hardening.collectAsState()
     val recentEvents by viewModel.recentEvents.collectAsState()
     val quarantineState by viewModel.quarantineState.collectAsState()
+    val installedTorPackages by viewModel.installedTorPackages.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsState()
     val isSyncingQuarantine by viewModel.isSyncingQuarantine.collectAsState()
@@ -168,6 +169,7 @@ fun BlockerRootScreen(
                     hasGithubToken = githubToken.isNotBlank() || BuildConfig.GITHUB_UPDATE_TOKEN.isNotBlank(),
                     recentEvents = recentEvents,
                     quarantineState = quarantineState,
+                    installedTorPackages = installedTorPackages,
                     isSyncing = isSyncing,
                     isCheckingUpdate = isCheckingUpdate,
                     isSyncingQuarantine = isSyncingQuarantine,
@@ -178,6 +180,7 @@ fun BlockerRootScreen(
                     onSyncNow = viewModel::syncBlocklistsNow,
                     onCheckUpdateNow = viewModel::checkGitHubUpdateNow,
                     onSyncQuarantineNow = viewModel::syncQuarantineToGitHubNow,
+                    onUninstallTor = viewModel::uninstallTorPackage,
                     onSaveGithubToken = viewModel::saveGithubToken
                 )
 
@@ -259,6 +262,7 @@ private fun DashboardTab(
     hasGithubToken: Boolean,
     recentEvents: List<BlockedEvent>,
     quarantineState: WeeklyQuarantineState,
+    installedTorPackages: List<String>,
     isSyncing: Boolean,
     isCheckingUpdate: Boolean,
     isSyncingQuarantine: Boolean,
@@ -269,6 +273,7 @@ private fun DashboardTab(
     onSyncNow: () -> Unit,
     onCheckUpdateNow: () -> Unit,
     onSyncQuarantineNow: () -> Unit,
+    onUninstallTor: (String) -> Unit,
     onSaveGithubToken: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -356,6 +361,52 @@ private fun DashboardTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        if (installedTorPackages.isNotEmpty()) {
+            item(key = "tor_detected_alert") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF4A151B)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = CrimsonAlert)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Tor / Proxy détecté sur le téléphone",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Tor est déjà bloqué à l'ouverture. En mode sans PC, Android demande 1 clic pour confirmer sa désinstallation :",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.9f)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        for (torPkg in installedTorPackages) {
+                            Button(
+                                onClick = { onUninstallTor(torPkg) },
+                                colors = ButtonDefaults.buttonColors(containerColor = CrimsonAlert),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = "Désinstaller $torPkg",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Hero Shield Status Card (100% VPN-free, No-PC, No-Shell, No-Account-Deletion!)
         item(key = "hero") {
             val standaloneReady = status.isDeviceAdminActive && status.isAccessibilityGuardEnabled

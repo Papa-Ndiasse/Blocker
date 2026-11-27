@@ -343,4 +343,32 @@ class ScreenContentClassifierTest {
             )
         )
     }
+
+    @Test
+    fun packageInstallerAllowsUninstallingTorButBlocksInstallingTorAndUninstallingBlocker() {
+        // Uninstalling Tor MUST be allowed in Samsung/Google PackageInstaller
+        assertNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.samsung.android.packageinstaller",
+                listOf("Tor Browser", "Voulez-vous désinstaller cette application ?", "Annuler", "OK"),
+                isSealed = true
+            )
+        )
+        // Installing Tor MUST remain blocked
+        assertNotNull(
+            ScreenContentClassifier.classifyAppText(
+                "com.samsung.android.packageinstaller",
+                listOf("Tor Browser", "Voulez-vous installer cette application ?", "Installer"),
+                isSealed = true
+            )
+        )
+        // Uninstalling Blocker MUST remain blocked once sealed
+        val blockerUninstall = ScreenContentClassifier.classifyAppText(
+            "com.samsung.android.packageinstaller",
+            listOf("Blocker", "Voulez-vous désinstaller cette application ?", "OK"),
+            isSealed = true
+        )
+        assertNotNull(blockerUninstall)
+        assertTrue(blockerUninstall!!.isSettingsTamper)
+    }
 }

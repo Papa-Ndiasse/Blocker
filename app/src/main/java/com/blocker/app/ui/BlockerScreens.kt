@@ -710,14 +710,19 @@ private fun DashboardTab(
                             Text("MAJ", fontSize = 12.sp)
                         }
                     }
-                    if (!hasGithubToken) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = { showTokenDialog = true },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Configurer token GitHub (si dépôt privé)", fontSize = 12.sp)
-                        }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showTokenDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (hasGithubToken) {
+                                "Modifier le token GitHub (configuré ✓)"
+                            } else {
+                                "Configurer token GitHub (MAJ & Quarantaine)"
+                            },
+                            fontSize = 12.sp
+                        )
                     }
                 }
             }
